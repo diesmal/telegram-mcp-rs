@@ -1,6 +1,6 @@
 # Telegram MCP
 
-A fast, pure-Rust [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that connects AI agents to Telegram. It runs either as a standard CLI tool (stdio) or as an HTTP/SSE server.
+A fast, pure-Rust [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that connects AI agents to Telegram. 
 
 ## Overview
 
