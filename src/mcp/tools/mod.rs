@@ -112,6 +112,9 @@ pub fn register_all_tools() -> HashMap<String, Box<dyn Tool>> {
     let download_media = media::DownloadMediaTool {};
     registry.insert(download_media.info().name, Box::new(download_media));
 
+    let get_image = media::GetImageTool {};
+    registry.insert(get_image.info().name, Box::new(get_image));
+
     // Folder tools
     let list_folders = folders::ListFoldersTool {};
     registry.insert(list_folders.info().name, Box::new(list_folders));

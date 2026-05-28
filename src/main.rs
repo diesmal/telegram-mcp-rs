@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use telegram_mcp_rs::{
     config::AppConfig,
-    mcp::{dispatcher::Dispatcher, protocol::JsonRpcRequest, sse::SseServer},
+    mcp::{dispatcher::Dispatcher, protocol::JsonRpcRequest},
     telegram::grammers_impl::GrammersService,
     telegram::path_guard::PathGuard,
 };
@@ -21,14 +21,6 @@ struct Args {
     /// Optional positional arguments define server-side allowed roots for file-path tools.
     #[arg(value_name = "ALLOWED_ROOTS")]
     allowed_roots: Vec<PathBuf>,
-
-    /// Run as an HTTP/SSE server on the specified port.
-    #[arg(short, long)]
-    sse: Option<u16>,
-
-    /// Host to bind the SSE server to (default: 127.0.0.1).
-    #[arg(short = 'H', long, default_value = "127.0.0.1")]
-    host: String,
 }
 
 #[tokio::main]
@@ -108,32 +100,25 @@ async fn main() -> Result<()> {
     let telegram_service = Arc::new(GrammersService::new(client, path_guard));
     let dispatcher = Arc::new(Dispatcher::new(telegram_service));
 
-    if let Some(port) = args.sse {
-        // 7a. MCP SSE Server mode
-        let addr: std::net::SocketAddr = format!("{}:{}", args.host, port).parse()?;
-        let server = Arc::new(SseServer::new(dispatcher));
-        server.run(addr).await?;
-    } else {
-        // 7b. MCP stdio loop
-        info!("Starting MCP JSON-RPC stdio loop...");
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
+    // 7. MCP stdio loop
+    info!("Starting MCP JSON-RPC stdio loop...");
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
 
-            match serde_json::from_str::<JsonRpcRequest>(&line) {
-                Ok(req) => {
-                    if let Some(resp) = dispatcher.dispatch(req).await {
-                        let out = serde_json::to_string(&resp)?;
-                        println!("{}", out);
-                        let _ = io::stdout().flush();
-                    }
+        match serde_json::from_str::<JsonRpcRequest>(&line) {
+            Ok(req) => {
+                if let Some(resp) = dispatcher.dispatch(req).await {
+                    let out = serde_json::to_string(&resp)?;
+                    println!("{}", out);
+                    let _ = io::stdout().flush();
                 }
-                Err(e) => {
-                    error!("Failed to parse JSON-RPC request: {}", e);
-                }
+            }
+            Err(e) => {
+                error!("Failed to parse JSON-RPC request: {}", e);
             }
         }
     }

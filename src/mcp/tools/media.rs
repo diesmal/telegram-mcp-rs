@@ -103,6 +103,65 @@ impl Tool for DownloadMediaTool {
     }
 }
 
+pub struct GetImageTool;
+
+#[async_trait]
+impl Tool for GetImageTool {
+    fn info(&self) -> ToolInfo {
+        ToolInfo {
+            name: "get_image".to_string(),
+            description: "Get an image from a message as base64 data so the LLM can see it.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "chat_id": { "type": "integer" },
+                    "message_id": { "type": "integer" }
+                },
+                "required": ["chat_id", "message_id"]
+            }),
+        }
+    }
+
+    async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
+        let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
+        let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
+        
+        // Download to a temporary location
+        match telegram.download_media(chat_id, message_id, None).await {
+            Ok(file_path) => {
+                // Read the file and encode to base64
+                match std::fs::read(&file_path) {
+                    Ok(bytes) => {
+                        use base64::{Engine as _, engine::general_purpose};
+                        let b64 = general_purpose::STANDARD.encode(&bytes);
+                        
+                        // Try to determine mime type from extension
+                        let mime_type = match file_path.extension().and_then(|s| s.to_str()) {
+                            Some("png") => "image/png",
+                            Some("jpg") | Some("jpeg") => "image/jpeg",
+                            Some("gif") => "image/gif",
+                            Some("webp") => "image/webp",
+                            _ => "image/jpeg", // Default
+                        };
+
+                        Ok(serde_json::json!({
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "data": b64,
+                                    "mimeType": mime_type
+                                }
+                            ]
+                        }))
+                    }
+                    Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error reading downloaded file: {}", e) }], "isError": true })),
+                }
+            }
+            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error downloading media: {}", e) }], "isError": true })),
+        }
+    }
+}
+
 pub struct SendContactTool;
 
 #[async_trait]

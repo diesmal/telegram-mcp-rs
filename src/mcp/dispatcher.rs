@@ -28,7 +28,9 @@ impl Dispatcher {
         let result = match req.method.as_str() {
             "initialize" => Some(serde_json::json!({
                 "protocolVersion": "2024-11-05",
-                "capabilities": {},
+                "capabilities": {
+                    "tools": {}
+                },
                 "serverInfo": {
                     "name": "telegram-mcp-rs",
                     "version": "0.1.0"

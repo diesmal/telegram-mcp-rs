@@ -1,6 +1,6 @@
 # Telegram MCP
 
-A fast, pure-Rust [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that connects AI agents to Telegram. 
+A fast, pure-Rust [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that connects AI agents to Telegram.
 
 ## Overview
 
@@ -9,7 +9,7 @@ This server provides over 40 tools that let an LLM act as your Telegram client. 
 - **Media:** Download and upload photos, files, and voice notes.
 - **Contacts & Chats:** Manage groups, ban users, update profiles, and read chat history.
 
-Because it's written in Rust, it has no Node.js dependencies, even when running the HTTP/SSE transport.
+Because it's written in Rust, it is extremely efficient and has zero external runtime dependencies.
 
 ## Setup
 
@@ -30,9 +30,7 @@ Because it's written in Rust, it has no Node.js dependencies, even when running 
 
 ## Usage
 
-### Option A: Local Use (Stdio)
-This is the standard way to use MCP with desktop apps like Claude or Cursor.
-
+### Local Configuration
 Add this to your client's config file (e.g., `claude_desktop_config.json`):
 ```json
 {
@@ -45,13 +43,26 @@ Add this to your client's config file (e.g., `claude_desktop_config.json`):
 }
 ```
 
-### Option B: Network Service (HTTP/SSE)
-If you are building a custom integration or want to access the server over a local network, you can start the built-in web server.
+### Remote / LAN Configuration (SSH)
+If your Telegram service is running on a different machine (e.g., a home server at `192.168.1.113`) and you want to connect to it from your desktop, use the SSH method. This forwards the standard I/O (stdio) over your local network securely.
 
-```bash
-./target/release/telegram-mcp-rs --sse 8000 --host 0.0.0.0
+**Prerequisite:** Ensure you have SSH key authentication set up so the connection doesn't prompt for a password.
+
+Add this to your `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "telegram-remote": {
+      "command": "ssh",
+      "args": [
+        "user@192.168.1.113",
+        "/full/path/to/telegram-mcp-rs/target/release/telegram-mcp-rs",
+        "/path/to/remote/downloads"
+      ]
+    }
+  }
+}
 ```
-Your clients can now connect to `http://localhost:8000/sse`.
 
 ## Security
 
