@@ -1,6 +1,6 @@
 [package]
 name = "telegram-mcp-rs"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "A high-performance, pure-Rust Model Context Protocol (MCP) server for Telegram with 40+ tools."
 license = "MIT"
