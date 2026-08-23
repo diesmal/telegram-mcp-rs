@@ -52,14 +52,30 @@ impl MessageService for GrammersService {
         Ok(result)
     }
 
-    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>) -> Result<Vec<MessageInfo>> {
+    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>) -> Result<Vec<MessageInfo>> {
         let peer_ref = self.get_peer_ref(peer_id).await?;
         
-        let from_id = if let Some(uid) = from_user_id {
-            Some(self.get_peer_ref(uid).await?)
-        } else {
-            None
-        };
+        let mut from_id = None;
+        if let Some(username) = from_username {
+            let peer = self.client.resolve_username(&username).await?;
+            if let Some(p) = peer {
+                match p {
+                    grammers_client::peer::Peer::User(u) => {
+                        let access_hash = match &u.raw { tl::enums::User::User(user) => user.access_hash.unwrap_or(0), _ => 0 };
+                        from_id = Some(tl::enums::InputPeer::User(tl::types::InputPeerUser { user_id: u.raw.id(), access_hash }));
+                    }
+                    grammers_client::peer::Peer::Group(g) => {
+                        let chat_id = match &g.raw { tl::enums::Chat::Chat(chat) => chat.id, tl::enums::Chat::Channel(c) => c.id, _ => 0 };
+                        from_id = Some(tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id }));
+                    }
+                    grammers_client::peer::Peer::Channel(c) => {
+                        from_id = Some(tl::enums::InputPeer::Channel(tl::types::InputPeerChannel { channel_id: c.raw.id, access_hash: c.raw.access_hash.unwrap_or(0) }));
+                    }
+                }
+            }
+        } else if let Some(uid) = from_user_id {
+            from_id = Some(self.get_peer_ref(uid).await?);
+        }
 
         let res = self.client.invoke(&tl::functions::messages::Search {
             peer: peer_ref,
