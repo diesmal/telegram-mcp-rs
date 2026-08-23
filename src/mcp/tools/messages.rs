@@ -78,7 +78,8 @@ impl Tool for SearchMessagesTool {
                 "properties": {
                     "chat_id": { "type": "integer" },
                     "query": { "type": "string" },
-                    "limit": { "type": "integer", "default": 20 }
+                    "limit": { "type": "integer", "default": 20 },
+                    "from_user_id": { "type": "integer" }
                 },
                 "required": ["chat_id", "query"]
             }),
@@ -89,7 +90,8 @@ impl Tool for SearchMessagesTool {
         let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
         let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("query is required"))?;
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
-        match telegram.search_messages(chat_id, query, limit).await {
+        let from_user_id = args.get("from_user_id").and_then(|v| v.as_i64());
+        match telegram.search_messages(chat_id, query, limit, from_user_id).await {
             Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
             Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
         }

@@ -52,24 +52,57 @@ impl MessageService for GrammersService {
         Ok(result)
     }
 
-    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32) -> Result<Vec<MessageInfo>> {
+    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>) -> Result<Vec<MessageInfo>> {
         let peer_ref = self.get_peer_ref(peer_id).await?;
-        let mut iter = self.client.iter_messages(peer_ref);
+        
+        let from_id = if let Some(uid) = from_user_id {
+            Some(self.get_peer_ref(uid).await?)
+        } else {
+            None
+        };
+
+        let res = self.client.invoke(&tl::functions::messages::Search {
+            peer: peer_ref,
+            q: query.to_string(),
+            from_id,
+            saved_peer_id: None,
+            saved_reaction: None,
+            top_msg_id: None,
+            filter: tl::enums::MessagesFilter::InputMessagesFilterEmpty,
+            min_date: 0,
+            max_date: 0,
+            offset_id: 0,
+            add_offset: 0,
+            limit,
+            max_id: 0,
+            min_id: 0,
+            hash: 0,
+        }).await?;
+
+        let messages = match res {
+            tl::enums::messages::Messages::Messages(m) => m.messages,
+            tl::enums::messages::Messages::Slice(s) => s.messages,
+            tl::enums::messages::Messages::ChannelMessages(c) => c.messages,
+            tl::enums::messages::Messages::NotModified(_) => Vec::new(),
+        };
+
         let mut result = Vec::new();
-        let mut count = 0;
-        while let Some(msg) = iter.next().await? {
-            if msg.text().contains(query) {
+        for msg in messages {
+            if let tl::enums::Message::Message(mm) = msg {
+                let sender_id = match mm.from_id {
+                    Some(tl::enums::Peer::User(u)) => u.user_id,
+                    Some(tl::enums::Peer::Chat(c)) => -c.chat_id,
+                    Some(tl::enums::Peer::Channel(c)) => -c.channel_id,
+                    None => 0,
+                };
+                
                 result.push(MessageInfo {
-                    id: msg.id(),
-                    sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-                    text: msg.text().to_string(),
-                    date: msg.date().timestamp(),
-                    reply_to_msg_id: msg.reply_to_message_id(),
+                    id: mm.id,
+                    sender_id,
+                    text: mm.message,
+                    date: mm.date as i64,
+                    reply_to_msg_id: None,
                 });
-                count += 1;
-            }
-            if count >= limit {
-                break;
             }
         }
         Ok(result)
