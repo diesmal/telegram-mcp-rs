@@ -77,18 +77,18 @@ impl Tool for SearchMessagesTool {
                 "type": "object",
                 "properties": {
                     "chat_id": { "type": "integer" },
-                    "query": { "type": "string" },
+                    "query": { "type": "string", "default": "" },
                     "limit": { "type": "integer", "default": 20 },
                     "from_user_id": { "type": "integer" }
                 },
-                "required": ["chat_id", "query"]
+                "required": ["chat_id"]
             }),
         }
     }
 
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
-        let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("query is required"))?;
+        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
         let from_user_id = args.get("from_user_id").and_then(|v| v.as_i64());
         match telegram.search_messages(chat_id, query, limit, from_user_id).await {
