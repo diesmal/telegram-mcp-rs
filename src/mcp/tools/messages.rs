@@ -72,7 +72,7 @@ impl Tool for SearchMessagesTool {
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: "search_messages".to_string(),
-            description: "Search for messages within a chat.".to_string(),
+            description: "Search for messages within a chat. Supports pagination (offset_id) and date filtering (min_date, max_date in unix timestamp format).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -80,7 +80,10 @@ impl Tool for SearchMessagesTool {
                     "query": { "type": "string", "default": "" },
                     "limit": { "type": "integer", "default": 20 },
                     "from_user_id": { "type": "integer" },
-                    "from_username": { "type": "string" }
+                    "from_username": { "type": "string" },
+                    "offset_id": { "type": "integer" },
+                    "min_date": { "type": "integer" },
+                    "max_date": { "type": "integer" }
                 },
                 "required": ["chat_id"]
             }),
@@ -93,7 +96,11 @@ impl Tool for SearchMessagesTool {
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
         let from_user_id = args.get("from_user_id").and_then(|v| v.as_i64());
         let from_username = args.get("from_username").and_then(|v| v.as_str()).map(|s| s.to_string());
-        match telegram.search_messages(chat_id, query, limit, from_user_id, from_username).await {
+        let offset_id = args.get("offset_id").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let min_date = args.get("min_date").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let max_date = args.get("max_date").and_then(|v| v.as_i64()).map(|v| v as i32);
+        
+        match telegram.search_messages(chat_id, query, limit, from_user_id, from_username, offset_id, min_date, max_date).await {
             Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
             Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
         }

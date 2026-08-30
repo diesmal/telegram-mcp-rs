@@ -86,7 +86,7 @@ pub trait ChatService {
 pub trait MessageService {
     async fn get_messages(&self, peer_id: i64, limit: i32) -> Result<Vec<MessageInfo>>;
     async fn get_history(&self, peer_id: i64, limit: i32, offset_id: Option<i32>) -> Result<Vec<MessageInfo>>;
-    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>) -> Result<Vec<MessageInfo>>;
+    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>, offset_id: Option<i32>, min_date: Option<i32>, max_date: Option<i32>) -> Result<Vec<MessageInfo>>;
     async fn send_message(&self, peer_id: i64, text: &str, reply_to_id: Option<i32>) -> Result<MessageInfo>;
     async fn edit_message(&self, peer_id: i64, message_id: i32, new_text: &str) -> Result<()>;
     async fn mark_as_read(&self, peer_id: i64) -> Result<()>;

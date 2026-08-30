@@ -52,7 +52,7 @@ impl MessageService for GrammersService {
         Ok(result)
     }
 
-    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>) -> Result<Vec<MessageInfo>> {
+    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>, offset_id: Option<i32>, min_date: Option<i32>, max_date: Option<i32>) -> Result<Vec<MessageInfo>> {
         let peer_ref = self.get_peer_ref(peer_id).await?;
         
         let mut from_id = None;
@@ -85,9 +85,9 @@ impl MessageService for GrammersService {
             saved_reaction: None,
             top_msg_id: None,
             filter: tl::enums::MessagesFilter::InputMessagesFilterEmpty,
-            min_date: 0,
-            max_date: 0,
-            offset_id: 0,
+            min_date: min_date.unwrap_or(0),
+            max_date: max_date.unwrap_or(0),
+            offset_id: offset_id.unwrap_or(0),
             add_offset: 0,
             limit,
             max_id: 0,
