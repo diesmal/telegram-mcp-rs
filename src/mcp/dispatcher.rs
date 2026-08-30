@@ -96,9 +96,14 @@ impl Dispatcher {
         let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
 
         if let Some(tool) = self.tools.get(name) {
-            return match tool.execute(args, Arc::clone(&self.telegram)).await {
-                Ok(v) => (Some(v), None),
-                Err(e) => (None, Some(e)),
+            let timeout_duration = std::time::Duration::from_secs(30);
+            return match tokio::time::timeout(timeout_duration, tool.execute(args, Arc::clone(&self.telegram))).await {
+                Ok(Ok(v)) => (Some(v), None),
+                Ok(Err(e)) => (None, Some(e)),
+                Err(_) => {
+                    let msg = format!("Tool execution timed out after 30 seconds. The Telegram API might be taking too long. Please try a simpler query or smaller limits (e.g. limit: 20) so the client doesn't time out.");
+                    (None, Some(JsonRpcError { code: -32000, message: msg, data: None }))
+                }
             };
         }
 

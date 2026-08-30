@@ -41,12 +41,12 @@ impl Tool for GetHistoryTool {
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: "get_history".to_string(),
-            description: "Get paginated message history.".to_string(),
+            description: "Get paginated message history. Safe to use limits up to 500 without timing out.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "chat_id": { "type": "integer" },
-                    "limit": { "type": "integer", "default": 20 },
+                    "limit": { "type": "integer", "default": 100 },
                     "offset_id": { "type": "integer" }
                 },
                 "required": ["chat_id"]
