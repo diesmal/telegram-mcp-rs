@@ -5,6 +5,29 @@ use async_trait::async_trait;
 use grammers_client::message::InputMessage;
 use grammers_tl_types as tl;
 
+fn parse_filter(filter: Option<&str>) -> tl::enums::MessagesFilter {
+    match filter.unwrap_or("empty") {
+        "photos" => tl::enums::MessagesFilter::InputMessagesFilterPhotos,
+        "video" => tl::enums::MessagesFilter::InputMessagesFilterVideo,
+        "photo_video" => tl::enums::MessagesFilter::InputMessagesFilterPhotoVideo,
+        "document" => tl::enums::MessagesFilter::InputMessagesFilterDocument,
+        "url" => tl::enums::MessagesFilter::InputMessagesFilterUrl,
+        "gif" => tl::enums::MessagesFilter::InputMessagesFilterGif,
+        "voice" => tl::enums::MessagesFilter::InputMessagesFilterVoice,
+        "music" => tl::enums::MessagesFilter::InputMessagesFilterMusic,
+        "chat_photos" => tl::enums::MessagesFilter::InputMessagesFilterChatPhotos,
+        "phone_calls" => tl::enums::MessagesFilter::InputMessagesFilterPhoneCalls(tl::types::InputMessagesFilterPhoneCalls { missed: false }),
+        "round_voice" => tl::enums::MessagesFilter::InputMessagesFilterRoundVoice,
+        "round_video" => tl::enums::MessagesFilter::InputMessagesFilterRoundVideo,
+        "my_mentions" => tl::enums::MessagesFilter::InputMessagesFilterMyMentions,
+        "geo" => tl::enums::MessagesFilter::InputMessagesFilterGeo,
+        "contacts" => tl::enums::MessagesFilter::InputMessagesFilterContacts,
+        "pinned" => tl::enums::MessagesFilter::InputMessagesFilterPinned,
+        _ => tl::enums::MessagesFilter::InputMessagesFilterEmpty,
+    }
+}
+
+
 #[async_trait]
 impl MessageService for GrammersService {
     async fn get_messages(&self, peer_id: i64, limit: i32) -> Result<Vec<MessageInfo>> {
@@ -52,7 +75,7 @@ impl MessageService for GrammersService {
         Ok(result)
     }
 
-    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>, offset_id: Option<i32>, min_date: Option<i32>, max_date: Option<i32>) -> Result<Vec<MessageInfo>> {
+    async fn search_messages(&self, peer_id: i64, query: &str, limit: i32, from_user_id: Option<i64>, from_username: Option<String>, offset_id: Option<i32>, min_date: Option<i32>, max_date: Option<i32>, filter_str: Option<String>) -> Result<Vec<MessageInfo>> {
         let peer_ref = self.get_peer_ref(peer_id).await?;
         
         let mut from_id = None;
@@ -84,7 +107,7 @@ impl MessageService for GrammersService {
             saved_peer_id: None,
             saved_reaction: None,
             top_msg_id: None,
-            filter: tl::enums::MessagesFilter::InputMessagesFilterEmpty,
+            filter: parse_filter(filter_str.as_deref()),
             min_date: min_date.unwrap_or(0),
             max_date: max_date.unwrap_or(0),
             offset_id: offset_id.unwrap_or(0),
@@ -93,6 +116,54 @@ impl MessageService for GrammersService {
             max_id: 0,
             min_id: 0,
             hash: 0,
+        }).await?;
+
+        let messages = match res {
+            tl::enums::messages::Messages::Messages(m) => m.messages,
+            tl::enums::messages::Messages::Slice(s) => s.messages,
+            tl::enums::messages::Messages::ChannelMessages(c) => c.messages,
+            tl::enums::messages::Messages::NotModified(_) => Vec::new(),
+        };
+
+        let mut result = Vec::new();
+        for msg in messages {
+            if let tl::enums::Message::Message(mm) = msg {
+                let sender_id = match mm.from_id {
+                    Some(tl::enums::Peer::User(u)) => u.user_id,
+                    Some(tl::enums::Peer::Chat(c)) => -c.chat_id,
+                    Some(tl::enums::Peer::Channel(c)) => -c.channel_id,
+                    None => 0,
+                };
+                
+                result.push(MessageInfo {
+                    id: mm.id,
+                    sender_id,
+                    text: mm.message,
+                    date: mm.date as i64,
+                    reply_to_msg_id: None,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+
+    async fn search_global_messages(&self, query: &str, limit: i32, offset_id: Option<i32>, min_date: Option<i32>, max_date: Option<i32>, filter_str: Option<String>) -> Result<Vec<MessageInfo>> {
+        let filter = parse_filter(filter_str.as_deref());
+
+        let res = self.client.invoke(&tl::functions::messages::SearchGlobal {
+            folder_id: None,
+            q: query.to_string(),
+            filter,
+            min_date: min_date.unwrap_or(0),
+            max_date: max_date.unwrap_or(0),
+            offset_rate: 0,
+            offset_peer: tl::enums::InputPeer::Empty,
+            offset_id: offset_id.unwrap_or(0),
+            limit,
+            broadcasts_only: false,
+            groups_only: false,
+            users_only: false,
         }).await?;
 
         let messages = match res {

@@ -167,7 +167,11 @@ mod tests {
         async fn get_history(&self, _peer_id: i64, _limit: i32, _offset_id: Option<i32>) -> Result<Vec<MessageInfo>> {
             Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
         }
-        async fn search_messages(&self, _peer_id: i64, _query: &str, _limit: i32, _from_user_id: Option<i64>, _from_username: Option<String>, _offset_id: Option<i32>, _min_date: Option<i32>, _max_date: Option<i32>) -> Result<Vec<MessageInfo>> {
+        async fn search_messages(&self, _peer_id: i64, _query: &str, _limit: i32, _from_user_id: Option<i64>, _from_username: Option<String>, _offset_id: Option<i32>, _min_date: Option<i32>, _max_date: Option<i32>, _filter: Option<String>) -> Result<Vec<MessageInfo>> {
+            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
+        }
+        
+        async fn search_global_messages(&self, _query: &str, _limit: i32, _offset_id: Option<i32>, _min_date: Option<i32>, _max_date: Option<i32>, _filter: Option<String>) -> Result<Vec<MessageInfo>> {
             Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
         }
         async fn send_message(&self, _peer_id: i64, _text: &str, _reply_to_id: Option<i32>) -> Result<MessageInfo> {

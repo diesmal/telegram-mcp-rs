@@ -83,7 +83,8 @@ impl Tool for SearchMessagesTool {
                     "from_username": { "type": "string" },
                     "offset_id": { "type": "integer" },
                     "min_date": { "type": "integer" },
-                    "max_date": { "type": "integer" }
+                    "max_date": { "type": "integer" },
+                    "filter": { "type": "string", "enum": ["empty", "photos", "video", "photo_video", "document", "url", "gif", "voice", "music", "chat_photos", "phone_calls", "round_voice", "round_video", "my_mentions", "geo", "contacts", "pinned"], "default": "empty" }
                 },
                 "required": ["chat_id"]
             }),
@@ -99,8 +100,9 @@ impl Tool for SearchMessagesTool {
         let offset_id = args.get("offset_id").and_then(|v| v.as_i64()).map(|v| v as i32);
         let min_date = args.get("min_date").and_then(|v| v.as_i64()).map(|v| v as i32);
         let max_date = args.get("max_date").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let filter = args.get("filter").and_then(|v| v.as_str()).map(|s| s.to_string());
         
-        match telegram.search_messages(chat_id, query, limit, from_user_id, from_username, offset_id, min_date, max_date).await {
+        match telegram.search_messages(chat_id, query, limit, from_user_id, from_username, offset_id, min_date, max_date, filter).await {
             Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
             Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
         }
@@ -761,3 +763,43 @@ impl Tool for WaitForSettledMessageTool {
         }
     }
 }
+
+
+pub struct SearchGlobalMessagesTool;
+
+#[async_trait]
+impl Tool for SearchGlobalMessagesTool {
+    fn info(&self) -> ToolInfo {
+        ToolInfo {
+            name: "search_global_messages".to_string(),
+            description: "Search for messages globally across all chats.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "default": "" },
+                    "limit": { "type": "integer", "default": 20 },
+                    "offset_id": { "type": "integer" },
+                    "min_date": { "type": "integer" },
+                    "max_date": { "type": "integer" },
+                    "filter": { "type": "string", "enum": ["empty", "photos", "video", "photo_video", "document", "url", "gif", "voice", "music", "chat_photos", "phone_calls", "round_voice", "round_video", "my_mentions", "geo", "contacts", "pinned"], "default": "empty" }
+                },
+                "required": ["query"]
+            }),
+        }
+    }
+
+    async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
+        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
+        let offset_id = args.get("offset_id").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let min_date = args.get("min_date").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let max_date = args.get("max_date").and_then(|v| v.as_i64()).map(|v| v as i32);
+        let filter = args.get("filter").and_then(|v| v.as_str()).map(|s| s.to_string());
+        
+        match telegram.search_global_messages(query, limit, offset_id, min_date, max_date, filter).await {
+            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
+            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+        }
+    }
+}
+
