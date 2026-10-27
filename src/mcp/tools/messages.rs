@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ impl Tool for GetMessagesTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "chat_id": { "type": "integer" },
                     "limit": { "type": "integer", "default": 20 }
                 },
@@ -28,8 +30,8 @@ impl Tool for GetMessagesTool {
         let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
         match telegram.get_messages(chat_id, limit).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -41,12 +43,13 @@ impl Tool for GetHistoryTool {
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: "get_history".to_string(),
-            description: "Get paginated message history. Safe to use limits up to 500 without timing out.".to_string(),
+            description: "Message history, newest first, one line per message. Page older with offset_id = smallest id seen.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "chat_id": { "type": "integer" },
-                    "limit": { "type": "integer", "default": 100 },
+                    "limit": { "type": "integer", "default": 20 },
                     "offset_id": { "type": "integer" }
                 },
                 "required": ["chat_id"]
@@ -59,8 +62,8 @@ impl Tool for GetHistoryTool {
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
         let offset_id = args.get("offset_id").and_then(|v| v.as_i64()).map(|v| v as i32);
         match telegram.get_history(chat_id, limit, offset_id).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -76,6 +79,7 @@ impl Tool for SearchMessagesTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "chat_id": { "type": "integer" },
                     "query": { "type": "string", "default": "" },
                     "limit": { "type": "integer", "default": 20 },
@@ -103,8 +107,8 @@ impl Tool for SearchMessagesTool {
         let filter = args.get("filter").and_then(|v| v.as_str()).map(|s| s.to_string());
         
         match telegram.search_messages(chat_id, query, limit, from_user_id, from_username, offset_id, min_date, max_date, filter).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -135,7 +139,7 @@ impl Tool for SendMessageTool {
         let reply_to_id = args.get("reply_to_id").and_then(|v| v.as_i64()).map(|v| v as i32);
         match telegram.send_message(chat_id, text, reply_to_id).await {
             Ok(msg) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Message sent (ID: {})", msg.id) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -166,7 +170,7 @@ impl Tool for EditMessageTool {
         let text = args.get("text").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("text is required"))?;
         match telegram.edit_message(chat_id, message_id, text).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Message edited." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -199,7 +203,7 @@ impl Tool for DeleteMessagesTool {
         let revoke = args.get("revoke").and_then(|v| v.as_bool()).unwrap_or(true);
         match telegram.delete_messages(chat_id, message_ids, revoke).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Messages deleted." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -235,7 +239,7 @@ impl Tool for ForwardMessagesTool {
                 let ids: Vec<i32> = msgs.iter().map(|m| m.id).collect();
                 Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Messages forwarded (IDs: {:?})", ids) }] }))
             }
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -266,7 +270,7 @@ impl Tool for SendReactionTool {
         let emoji = args.get("emoji").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("emoji is required"))?;
         match telegram.send_reaction(chat_id, message_id, emoji).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Reaction sent." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -282,6 +286,7 @@ impl Tool for GetScheduledMessagesTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "chat_id": { "type": "integer" }
                 },
                 "required": ["chat_id"]
@@ -292,8 +297,8 @@ impl Tool for GetScheduledMessagesTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
         match telegram.get_scheduled_messages(chat_id).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -324,7 +329,7 @@ impl Tool for SaveDraftTool {
         let reply_to_id = args.get("reply_to_id").and_then(|v| v.as_i64()).map(|v| v as i32);
         match telegram.save_draft(chat_id, message, reply_to_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Draft saved." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -347,7 +352,7 @@ impl Tool for ClearDraftsTool {
     async fn execute(&self, _args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         match telegram.clear_drafts().await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "All drafts cleared." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -373,8 +378,8 @@ impl Tool for CreatePollTool {
         let question = args.get("question").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("question is required"))?;
         let options = args.get("options").and_then(|v| v.as_array()).ok_or_else(|| invalid_params("options is required"))?.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>();
         match telegram.create_poll(peer_id, question, options).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -389,7 +394,8 @@ impl Tool for GetMessageContextTool {
             description: "Get message context.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": { "peer_id": { "type": "integer" }, "message_id": { "type": "integer" } }
+                "properties": {
+                    "full": format::full_schema(), "peer_id": { "type": "integer" }, "message_id": { "type": "integer" } }
                 , "required": ["peer_id", "message_id"]
             }),
         }
@@ -399,8 +405,8 @@ impl Tool for GetMessageContextTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.get_message_context(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -425,8 +431,8 @@ impl Tool for GetMessageLinkTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.get_message_link(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -451,8 +457,8 @@ impl Tool for GetMessageReactionsTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.get_message_reactions(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -477,8 +483,8 @@ impl Tool for GetMessageReadByTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.get_message_read_by(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -493,7 +499,8 @@ impl Tool for GetPinnedMessagesTool {
             description: "Get pinned messages.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": { "peer_id": { "type": "integer" } }
+                "properties": {
+                    "full": format::full_schema(), "peer_id": { "type": "integer" } }
                 , "required": ["peer_id"]
             }),
         }
@@ -502,8 +509,8 @@ impl Tool for GetPinnedMessagesTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.get_pinned_messages(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -528,8 +535,8 @@ impl Tool for UnpinMessageTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.unpin_message(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -553,8 +560,8 @@ impl Tool for UnpinAllMessagesTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.unpin_all_messages(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -579,8 +586,8 @@ impl Tool for DeleteScheduledMessageTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.delete_scheduled_message(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -605,8 +612,8 @@ impl Tool for RemoveReactionTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("message_id is required"))? as i32;
         match telegram.remove_reaction(peer_id, message_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -630,8 +637,8 @@ impl Tool for DeleteChatHistoryTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.delete_chat_history(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -657,8 +664,8 @@ impl Tool for PinMessageTool {
         let message_id = args.get("message_id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let silent = args.get("silent").and_then(|v| v.as_bool()).unwrap_or(false);
         match telegram.pin_message(peer_id, message_id, silent).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -682,8 +689,8 @@ impl Tool for MarkAsReadTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.mark_as_read(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -707,8 +714,8 @@ impl Tool for GetDraftsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.get_drafts().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -732,8 +739,8 @@ impl Tool for WaitForNewMessageTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let timeout = args.get("timeout").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         match telegram.wait_for_new_message(timeout).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -758,8 +765,8 @@ impl Tool for WaitForSettledMessageTool {
         let settle_ms = args.get("settle_ms").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         let max_wait_ms = args.get("max_wait_ms").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
         match telegram.wait_for_settled_message(settle_ms, max_wait_ms).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -776,6 +783,7 @@ impl Tool for SearchGlobalMessagesTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "query": { "type": "string", "default": "" },
                     "limit": { "type": "integer", "default": 20 },
                     "offset_id": { "type": "integer" },
@@ -797,8 +805,8 @@ impl Tool for SearchGlobalMessagesTool {
         let filter = args.get("filter").and_then(|v| v.as_str()).map(|s| s.to_string());
         
         match telegram.search_global_messages(query, limit, offset_id, min_date, max_date, filter).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

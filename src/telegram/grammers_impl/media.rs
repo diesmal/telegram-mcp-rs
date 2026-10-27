@@ -1,5 +1,5 @@
 use crate::telegram::{MediaService, MessageInfo};
-use super::GrammersService;
+use super::{convert, GrammersService};
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -27,13 +27,7 @@ impl MediaService for GrammersService {
         };
 
         let msg = self.client.send_message(peer_ref, input).await?;
-        Ok(MessageInfo {
-            id: msg.id(),
-            sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-            text: msg.text().to_string(),
-            date: msg.date().timestamp(),
-            reply_to_msg_id: msg.reply_to_message_id(),
-        })
+        Ok(convert::msg_from_client(&msg))
     }
 
     async fn send_album(&self, peer_id: i64, paths: Vec<String>, caption: Option<&str>) -> Result<Vec<MessageInfo>> {
@@ -58,13 +52,7 @@ impl MediaService for GrammersService {
             msgs.push(self.client.send_message(peer_ref.clone(), input).await?);
         }
         
-        Ok(msgs.into_iter().map(|msg| MessageInfo {
-            id: msg.id(),
-            sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-            text: msg.text().to_string(),
-            date: msg.date().timestamp(),
-            reply_to_msg_id: msg.reply_to_message_id(),
-        }).collect())
+        Ok(msgs.iter().map(convert::msg_from_client).collect())
     }
 
     async fn download_media(&self, peer_id: i64, message_id: i32, path: Option<&str>) -> Result<PathBuf> {
@@ -114,10 +102,11 @@ impl MediaService for GrammersService {
         let msg = self.client.get_messages_by_id(peer_ref, &[message_id]).await?
             .pop().flatten().context("Message not found")?;
         
-        if let Some(media) = msg.media() {
-            return Ok(format!("{:?}", media));
-        }
-        Ok("No media".to_string())
+        let label = match &msg.raw {
+            grammers_tl_types::enums::Message::Message(m) => m.media.as_ref().and_then(convert::media_label),
+            _ => None,
+        };
+        Ok(label.unwrap_or_else(|| "No media".to_string()))
     }
 
     async fn get_sticker_sets(&self) -> Result<Vec<String>> {

@@ -11,21 +11,30 @@ pub struct UserInfo {
     pub username: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatInfo {
     pub id: i64,
     pub title: String,
     pub username: Option<String>,
-    pub chat_type: String, // "User", "Group", "Channel", etc.
+    /// Short kind: "user", "bot", "group", "supergroup", "channel".
+    pub kind: String,
+    pub members: Option<i32>,
+    pub unread: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MessageInfo {
     pub id: i32,
     pub sender_id: i64,
+    pub sender_name: Option<String>,
     pub text: String,
     pub date: i64,
     pub reply_to_msg_id: Option<i32>,
+    /// Short media label ("photo", "video", "file: report.pdf", ...).
+    pub media: Option<String>,
+    /// Set only when results span several chats (global search).
+    pub chat_id: Option<i64>,
+    pub chat_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,7 +78,7 @@ pub trait AuthService {
 
 #[async_trait]
 pub trait ChatService {
-    async fn list_chats(&self, limit: i32) -> Result<Vec<ChatInfo>>;
+    async fn list_chats(&self, limit: i32, query: Option<&str>, kind: Option<&str>) -> Result<Vec<ChatInfo>>;
     async fn get_chat_info(&self, peer_id: i64) -> Result<ChatInfo>;
     async fn create_group(&self, title: &str, user_ids: Vec<i64>) -> Result<i64>;
     async fn create_channel(&self, title: &str, about: &str, megagroup: bool) -> Result<i64>;

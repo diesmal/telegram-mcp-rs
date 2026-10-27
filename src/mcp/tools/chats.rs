@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -12,21 +13,25 @@ impl Tool for ListChatsTool {
     fn info(&self) -> ToolInfo {
         ToolInfo {
             name: "list_chats".to_string(),
-            description: "List recent conversations.".to_string(),
+            description: "Recent chats, one line each: id | kind | title | @username | members | unread. Use query/type to find a specific chat instead of paging through all.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "limit": { "type": "integer", "default": 10 }
+                    "limit": { "type": "integer", "default": 20 },
+                    "query": { "type": "string", "description": "Case-insensitive match on title or @username" },
+                    "type": { "type": "string", "enum": ["user", "bot", "group", "supergroup", "channel"], "description": "\"group\" also matches supergroups" }
                 }
             }),
         }
     }
 
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
-        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(10) as i32;
-        match telegram.list_chats(limit).await {
-            Ok(chats) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&chats).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+        let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(20) as i32;
+        let query = args.get("query").and_then(|v| v.as_str());
+        let kind = args.get("type").and_then(|v| v.as_str());
+        match telegram.list_chats(limit, query, kind).await {
+            Ok(chats) => Ok(format::ok(&chats, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -55,8 +60,8 @@ impl Tool for GetChatInfoTool {
             None => return Err(invalid_params("chat_id is required")),
         };
         match telegram.get_chat_info(chat_id).await {
-            Ok(chat) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&chat).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(chat) => Ok(format::ok(&chat, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -91,7 +96,7 @@ impl Tool for CreateGroupTool {
         };
         match telegram.create_group(title, user_ids).await {
             Ok(id) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Group created (ID: {})", id) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -128,7 +133,7 @@ impl Tool for CreateChannelTool {
         let megagroup = args.get("megagroup").and_then(|v| v.as_bool()).unwrap_or(false);
         match telegram.create_channel(title, about, megagroup).await {
             Ok(id) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Channel created (ID: {})", id) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -158,7 +163,7 @@ impl Tool for LeaveChatTool {
         };
         match telegram.leave_chat(chat_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Left chat." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -195,7 +200,7 @@ impl Tool for SetChatMutedTool {
         let until = args.get("until").and_then(|v| v.as_i64()).map(|v| v as i32);
         match telegram.set_chat_muted(chat_id, muted, until).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Chat {}", if muted { "muted" } else { "unmuted" }) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -230,7 +235,7 @@ impl Tool for SetChatArchivedTool {
         };
         match telegram.set_chat_archived(chat_id, archived).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Chat {}", if archived { "archived" } else { "unarchived" }) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -255,8 +260,8 @@ impl Tool for EditChatAboutTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let about = args.get("about").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("about is required"))?;
         match telegram.edit_chat_about(peer_id, about).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -281,8 +286,8 @@ impl Tool for EditChatPhotoTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("path is required"))?;
         match telegram.edit_chat_photo(peer_id, path).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -307,8 +312,8 @@ impl Tool for EditChatTitleTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("title is required"))?;
         match telegram.edit_chat_title(peer_id, title).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -332,8 +337,8 @@ impl Tool for DeleteChatPhotoTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.delete_chat_photo(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

@@ -1,120 +1,213 @@
+use crate::mcp::format;
 use crate::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
-use crate::mcp::tool::Tool;
-use crate::mcp::tools::register_all_tools;
+use crate::mcp::tool::{invalid_params, Tool};
+use crate::mcp::tools::{registry, GROUPS};
 use crate::telegram::TelegramService;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
+
+const META_LIST: &str = "telegram_tools";
+const META_CALL: &str = "telegram_call";
+
+const INSTRUCTIONS: &str = "Telegram client. Results are compact text lines; ids come first. \
+Find chats with list_chats(query=..., type=...) instead of listing everything. \
+Message texts are cut at 300 chars; pass full=true to read them whole. \
+Less common tools (admin, folders, contacts, pins, drafts, profile, bots) are not listed directly: \
+call telegram_tools to see groups, telegram_tools(group) for their parameters, then telegram_call(tool, arguments).";
+
+/// Which tools `tools/list` advertises. Every registered tool stays callable
+/// by name either way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ToolsMode {
+    /// Core tools plus the two meta tools (default).
+    Core,
+    /// Every tool, flat.
+    All,
+}
+
+impl ToolsMode {
+    pub fn from_env() -> Self {
+        match std::env::var("TELEGRAM_TOOLS").as_deref() {
+            Ok("all") => ToolsMode::All,
+            _ => ToolsMode::Core,
+        }
+    }
+}
+
+struct Entry {
+    group: &'static str,
+    tool: Box<dyn Tool>,
+}
+
+/// Static part of the server: tool metadata. Needs no Telegram connection, so
+/// the stdio proxy can answer `initialize` / `tools/list` on its own.
+pub struct Catalog {
+    mode: ToolsMode,
+    order: Vec<String>,
+    tools: HashMap<String, Entry>,
+}
+
+impl Catalog {
+    pub fn new(mode: ToolsMode) -> Self {
+        let mut order = Vec::new();
+        let mut tools = HashMap::new();
+        for (group, tool) in registry() {
+            let name = tool.info().name;
+            order.push(name.clone());
+            tools.insert(name, Entry { group, tool });
+        }
+        Self { mode, order, tools }
+    }
+
+    pub fn initialize_result(&self) -> Value {
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": { "name": "telegram-mcp-rs", "version": env!("CARGO_PKG_VERSION") },
+            "instructions": INSTRUCTIONS,
+        })
+    }
+
+    fn schema(&self, name: &str) -> Value {
+        let info = self.tools[name].tool.info();
+        json!({ "name": info.name, "description": info.description, "inputSchema": info.input_schema })
+    }
+
+    pub fn tools_list_result(&self) -> Value {
+        let mut list: Vec<Value> = self
+            .order
+            .iter()
+            .filter(|n| self.mode == ToolsMode::All || self.tools[*n].group == "core")
+            .map(|n| self.schema(n))
+            .collect();
+        if self.mode == ToolsMode::Core {
+            let groups: Vec<&str> = GROUPS.iter().map(|(g, _)| *g).filter(|g| *g != "core").collect();
+            list.push(json!({
+                "name": META_LIST,
+                "description": "List extra Telegram tool groups, or with `group` show that group's tools and parameters.",
+                "inputSchema": { "type": "object", "properties": { "group": { "type": "string", "enum": groups } } }
+            }));
+            list.push(json!({
+                "name": META_CALL,
+                "description": "Call a Telegram tool from telegram_tools by name.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": { "tool": { "type": "string" }, "arguments": { "type": "object" } },
+                    "required": ["tool"]
+                }
+            }));
+        }
+        json!({ "tools": list })
+    }
+
+    fn describe(&self, group: Option<&str>) -> Value {
+        let in_group = |g: &str| -> Vec<&String> { self.order.iter().filter(|n| self.tools[*n].group == g).collect() };
+        let text = match group {
+            None => GROUPS
+                .iter()
+                .filter(|(g, _)| *g != "core")
+                .map(|(g, desc)| format!("{g}: {desc}\n  {}", in_group(g).iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ")))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Some(g) if GROUPS.iter().any(|(name, _)| *name == g) => in_group(g)
+                .into_iter()
+                .map(|n| {
+                    let info = self.tools[n].tool.info();
+                    let props = info.input_schema.get("properties").cloned().unwrap_or(json!({}));
+                    let required = info.input_schema.get("required").cloned().unwrap_or(json!([]));
+                    format!("{}: {}\n  params: {} required: {}", info.name, info.description, props, required)
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Some(g) => return format::err(format!("Unknown group '{g}'")),
+        };
+        format::ok(&text, false)
+    }
+}
 
 pub struct Dispatcher {
     telegram: Arc<dyn TelegramService>,
-    tools: HashMap<String, Box<dyn Tool>>,
+    catalog: Arc<Catalog>,
 }
 
 impl Dispatcher {
     pub fn new(telegram: Arc<dyn TelegramService>) -> Self {
-        Self { 
-            telegram,
-            tools: register_all_tools(),
-        }
+        Self::with_mode(telegram, ToolsMode::from_env())
+    }
+
+    pub fn with_mode(telegram: Arc<dyn TelegramService>, mode: ToolsMode) -> Self {
+        Self { telegram, catalog: Arc::new(Catalog::new(mode)) }
     }
 
     pub async fn dispatch(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = match req.id {
-            Some(id) => id,
-            None => return None, // Notification
-        };
+        // Notifications get no response.
+        let id = req.id?;
 
         let result = match req.method.as_str() {
-            "initialize" => Some(serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "tools": {}
-                },
-                "serverInfo": {
-                    "name": "telegram-mcp-rs",
-                    "version": "0.1.0"
-                }
-            })),
-            "tools/list" => self.handle_tools_list().await,
-            "tools/call" => {
-                let (res, err) = self.handle_tools_call(req.params).await;
-                if let Some(e) = err {
-                    return Some(JsonRpcResponse { jsonrpc: "2.0".to_string(), id, result: None, error: Some(e) });
-                }
-                res
-            }
-            _ => {
-                return Some(JsonRpcResponse {
-                    jsonrpc: "2.0".to_string(),
-                    id,
-                    result: None,
-                    error: Some(JsonRpcError {
-                        code: -32601,
-                        message: format!("Method not found: {}", req.method),
-                        data: None,
-                    }),
-                });
-            }
+            "initialize" => Ok(self.catalog.initialize_result()),
+            "tools/list" => Ok(self.catalog.tools_list_result()),
+            "tools/call" => self.handle_tools_call(req.params).await,
+            "ping" => Ok(json!({})),
+            _ => Err(JsonRpcError { code: -32601, message: format!("Method not found: {}", req.method), data: None }),
         };
 
-        Some(JsonRpcResponse {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result,
-            error: None,
+        Some(match result {
+            Ok(v) => JsonRpcResponse { jsonrpc: "2.0".to_string(), id, result: Some(v), error: None },
+            Err(e) => JsonRpcResponse { jsonrpc: "2.0".to_string(), id, result: None, error: Some(e) },
         })
     }
 
-    async fn handle_tools_list(&self) -> Option<Value> {
-        let mut tools_schema = Vec::new();
-        for tool in self.tools.values() {
-            let info = tool.info();
-            tools_schema.push(serde_json::json!({
-                "name": info.name,
-                "description": info.description,
-                "inputSchema": info.input_schema
-            }));
-        }
+    async fn handle_tools_call(&self, params: Option<Value>) -> Result<Value, JsonRpcError> {
+        let params = params.ok_or_else(|| invalid_params("Missing params"))?;
+        let name = params
+            .get("name")
+            .and_then(|n| n.as_str())
+            .ok_or_else(|| invalid_params("Missing or invalid 'name' in params"))?;
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        Some(serde_json::json!({
-            "tools": tools_schema
-        }))
-    }
-
-    async fn handle_tools_call(&self, params: Option<Value>) -> (Option<Value>, Option<JsonRpcError>) {
-        let params = match params {
-            Some(p) => p,
-            None => return (None, Some(Self::invalid_params("Missing params"))),
-        };
-
-        let name = match params.get("name").and_then(|n| n.as_str()) {
-            Some(n) => n,
-            None => return (None, Some(Self::invalid_params("Missing or invalid 'name' in params"))),
-        };
-
-        let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
-
-        if let Some(tool) = self.tools.get(name) {
-            let timeout_duration = std::time::Duration::from_secs(30);
-            return match tokio::time::timeout(timeout_duration, tool.execute(args, Arc::clone(&self.telegram))).await {
-                Ok(Ok(v)) => (Some(v), None),
-                Ok(Err(e)) => (None, Some(e)),
-                Err(_) => {
-                    let msg = format!("Tool execution timed out after 30 seconds. The Telegram API might be taking too long. Please try a simpler query or smaller limits (e.g. limit: 20) so the client doesn't time out.");
-                    (None, Some(JsonRpcError { code: -32000, message: msg, data: None }))
+        match name {
+            META_LIST => Ok(self.catalog.describe(args.get("group").and_then(|g| g.as_str()))),
+            META_CALL => {
+                let tool = args.get("tool").and_then(|t| t.as_str()).ok_or_else(|| invalid_params("'tool' is required"))?;
+                let inner = args.get("arguments").cloned().unwrap_or(json!({}));
+                if tool == META_LIST || tool == META_CALL {
+                    return Err(invalid_params("telegram_call cannot call meta tools"));
                 }
-            };
+                self.run_tool(tool, inner).await
+            }
+            _ => self.run_tool(name, args).await,
         }
-
-        (None, Some(JsonRpcError { code: -32601, message: format!("Tool not found: {}", name), data: None }))
     }
 
-    fn invalid_params(msg: &str) -> JsonRpcError {
-        JsonRpcError {
-            code: -32602,
-            message: msg.to_string(),
-            data: None,
+    async fn run_tool(&self, name: &str, args: Value) -> Result<Value, JsonRpcError> {
+        if !self.catalog.tools.contains_key(name) {
+            return Err(JsonRpcError {
+                code: -32601,
+                message: format!("Tool not found: {name}. See telegram_tools for available tools."),
+                data: None,
+            });
+        }
+        // Uploads and downloads can legitimately take a while.
+        let secs = match name {
+            "send_file" | "send_album" | "download_media" | "get_image" | "set_profile_photo" => 300,
+            _ => 30,
+        };
+        let catalog = Arc::clone(&self.catalog);
+        let telegram = Arc::clone(&self.telegram);
+        let owned = name.to_string();
+        // Run in its own task so a panic inside a tool becomes an error
+        // response instead of taking the connection down.
+        let task = tokio::spawn(async move { catalog.tools[&owned].tool.execute(args, telegram).await });
+        match tokio::time::timeout(Duration::from_secs(secs), task).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(join_err)) => Ok(format::err(format!("tool crashed: {join_err}"))),
+            Err(_) => Err(JsonRpcError {
+                code: -32000,
+                message: format!("Tool execution timed out after {secs} seconds. Try a smaller limit."),
+                data: None,
+            }),
         }
     }
 }
@@ -142,11 +235,11 @@ mod tests {
 
     #[async_trait]
     impl ChatService for MockTelegramService {
-        async fn list_chats(&self, _limit: i32) -> Result<Vec<ChatInfo>> {
-            Ok(vec![ChatInfo { id: 456, title: "Test Chat".to_string(), username: None, chat_type: "Group".to_string() }])
+        async fn list_chats(&self, _limit: i32, _query: Option<&str>, _kind: Option<&str>) -> Result<Vec<ChatInfo>> {
+            Ok(vec![ChatInfo { id: 456, title: "Test Chat".to_string(), username: None, kind: "group".to_string(), ..Default::default() }])
         }
         async fn get_chat_info(&self, _peer_id: i64) -> Result<ChatInfo> {
-            Ok(ChatInfo { id: 456, title: "Test Chat".to_string(), username: None, chat_type: "Group".to_string() })
+            Ok(ChatInfo { id: 456, title: "Test Chat".to_string(), username: None, kind: "group".to_string(), ..Default::default() })
         }
         async fn create_group(&self, _title: &str, _user_ids: Vec<i64>) -> Result<i64> { Ok(999) }
         async fn create_channel(&self, _title: &str, _about: &str, _megagroup: bool) -> Result<i64> { Ok(888) }
@@ -162,35 +255,35 @@ mod tests {
     #[async_trait]
     impl MessageService for MockTelegramService {
         async fn get_messages(&self, _peer_id: i64, _limit: i32) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn get_history(&self, _peer_id: i64, _limit: i32, _offset_id: Option<i32>) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn search_messages(&self, _peer_id: i64, _query: &str, _limit: i32, _from_user_id: Option<i64>, _from_username: Option<String>, _offset_id: Option<i32>, _min_date: Option<i32>, _max_date: Option<i32>, _filter: Option<String>) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         
         async fn search_global_messages(&self, _query: &str, _limit: i32, _offset_id: Option<i32>, _min_date: Option<i32>, _max_date: Option<i32>, _filter: Option<String>) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 1, sender_id: 123, text: "Hello".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn send_message(&self, _peer_id: i64, _text: &str, _reply_to_id: Option<i32>) -> Result<MessageInfo> {
-            Ok(MessageInfo { id: 2, sender_id: 123, text: "Sent".to_string(), date: 0, reply_to_msg_id: None })
+            Ok(MessageInfo { id: 2, sender_id: 123, text: "Sent".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() })
         }
         async fn edit_message(&self, _peer_id: i64, _message_id: i32, _new_text: &str) -> Result<()> { Ok(()) }
         async fn mark_as_read(&self, _peer_id: i64) -> Result<()> { Ok(()) }
         async fn pin_message(&self, _peer_id: i64, _message_id: i32, _silent: bool) -> Result<()> { Ok(()) }
         async fn delete_messages(&self, _peer_id: i64, _message_ids: Vec<i32>, _revoke: bool) -> Result<()> { Ok(()) }
         async fn forward_messages(&self, _to_peer_id: i64, _from_peer_id: i64, _message_ids: Vec<i32>) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 5, sender_id: 123, text: "Forwarded".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 5, sender_id: 123, text: "Forwarded".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn send_reaction(&self, _peer_id: i64, _message_id: i32, _emoji: &str) -> Result<()> { Ok(()) }
         async fn get_scheduled_messages(&self, _peer_id: i64) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 6, sender_id: 123, text: "Scheduled".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 6, sender_id: 123, text: "Scheduled".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn save_draft(&self, _peer_id: i64, _message: &str, _reply_to_id: Option<i32>) -> Result<()> { Ok(()) }
         async fn clear_drafts(&self) -> Result<()> { Ok(()) }
-        async fn create_poll(&self, _peer_id: i64, _question: &str, _options: Vec<String>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Poll".to_string(), date: 0, reply_to_msg_id: None }) }
+        async fn create_poll(&self, _peer_id: i64, _question: &str, _options: Vec<String>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Poll".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
         async fn get_message_context(&self, _peer_id: i64, _message_id: i32) -> Result<Vec<MessageInfo>> { Ok(vec![]) }
         async fn get_message_link(&self, _peer_id: i64, _message_id: i32) -> Result<String> { Ok("link".to_string()) }
         async fn get_message_reactions(&self, _peer_id: i64, _message_id: i32) -> Result<Vec<String>> { Ok(vec![]) }
@@ -202,25 +295,25 @@ mod tests {
         async fn remove_reaction(&self, _peer_id: i64, _message_id: i32) -> Result<()> { Ok(()) }
         async fn delete_chat_history(&self, _peer_id: i64) -> Result<()> { Ok(()) }
         async fn get_drafts(&self) -> Result<Vec<MessageInfo>> { Ok(vec![]) }
-        async fn wait_for_new_message(&self, _timeout: i32) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "msg".to_string(), date: 0, reply_to_msg_id: None }) }
-        async fn wait_for_settled_message(&self, _settle_ms: i32, _max_wait_ms: i32) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "msg".to_string(), date: 0, reply_to_msg_id: None }) }
+        async fn wait_for_new_message(&self, _timeout: i32) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "msg".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
+        async fn wait_for_settled_message(&self, _settle_ms: i32, _max_wait_ms: i32) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "msg".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
     }
 
     #[async_trait]
     impl MediaService for MockTelegramService {
         async fn send_file(&self, _peer_id: i64, _path: &str, _caption: Option<&str>) -> Result<MessageInfo> {
-            Ok(MessageInfo { id: 3, sender_id: 123, text: "File".to_string(), date: 0, reply_to_msg_id: None })
+            Ok(MessageInfo { id: 3, sender_id: 123, text: "File".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() })
         }
         async fn send_album(&self, _peer_id: i64, _paths: Vec<String>, _caption: Option<&str>) -> Result<Vec<MessageInfo>> {
-            Ok(vec![MessageInfo { id: 4, sender_id: 123, text: "Album".to_string(), date: 0, reply_to_msg_id: None }])
+            Ok(vec![MessageInfo { id: 4, sender_id: 123, text: "Album".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }])
         }
         async fn download_media(&self, _peer_id: i64, _message_id: i32, _path: Option<&str>) -> Result<PathBuf> {
             Ok(PathBuf::from("/tmp/test.media"))
         }
-        async fn send_contact(&self, _peer_id: i64, _phone: &str, _first_name: &str, _last_name: &str) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Contact".to_string(), date: 0, reply_to_msg_id: None }) }
-        async fn send_gif(&self, _peer_id: i64, _path: &str, _caption: Option<&str>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Gif".to_string(), date: 0, reply_to_msg_id: None }) }
-        async fn send_sticker(&self, _peer_id: i64, _path: &str) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Sticker".to_string(), date: 0, reply_to_msg_id: None }) }
-        async fn send_voice(&self, _peer_id: i64, _path: &str, _caption: Option<&str>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Voice".to_string(), date: 0, reply_to_msg_id: None }) }
+        async fn send_contact(&self, _peer_id: i64, _phone: &str, _first_name: &str, _last_name: &str) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Contact".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
+        async fn send_gif(&self, _peer_id: i64, _path: &str, _caption: Option<&str>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Gif".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
+        async fn send_sticker(&self, _peer_id: i64, _path: &str) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Sticker".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
+        async fn send_voice(&self, _peer_id: i64, _path: &str, _caption: Option<&str>) -> Result<MessageInfo> { Ok(MessageInfo { id: 1, sender_id: 123, text: "Voice".to_string(), date: 0, reply_to_msg_id: None, ..Default::default() }) }
         async fn get_gif_search(&self, _query: &str) -> Result<Vec<String>> { Ok(vec![]) }
         async fn get_media_info(&self, _peer_id: i64, _message_id: i32) -> Result<String> { Ok("info".to_string()) }
         async fn get_sticker_sets(&self) -> Result<Vec<String>> { Ok(vec![]) }
@@ -355,5 +448,36 @@ mod tests {
         let resp = dispatcher.dispatch(req).await.unwrap();
         assert!(resp.error.is_none());
         assert!(resp.result.unwrap()["content"][0]["text"].as_str().unwrap().contains("About"));
+    }
+
+    fn call(name: &str, args: Value) -> JsonRpcRequest {
+        JsonRpcRequest { jsonrpc: "2.0".to_string(), id: Some(Value::Number(9.into())), method: "tools/call".to_string(), params: Some(serde_json::json!({"name": name, "arguments": args})) }
+    }
+
+    #[test]
+    fn core_mode_lists_core_plus_meta() {
+        let core = Catalog::new(ToolsMode::Core).tools_list_result();
+        let names: Vec<&str> = core["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"list_chats") && names.contains(&META_LIST) && names.contains(&META_CALL));
+        assert!(!names.contains(&"ban_user"));
+        let all = Catalog::new(ToolsMode::All).tools_list_result();
+        let all_names: Vec<&str> = all["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(all_names.contains(&"ban_user") && !all_names.contains(&META_CALL));
+    }
+
+    #[tokio::test]
+    async fn meta_tools_describe_and_call() {
+        let dispatcher = Dispatcher::with_mode(Arc::new(MockTelegramService { authorized: true }), ToolsMode::Core);
+        let groups = dispatcher.dispatch(call(META_LIST, serde_json::json!({}))).await.unwrap().result.unwrap();
+        assert!(groups["content"][0]["text"].as_str().unwrap().contains("admin:"));
+        let admin = dispatcher.dispatch(call(META_LIST, serde_json::json!({"group": "admin"}))).await.unwrap().result.unwrap();
+        assert!(admin["content"][0]["text"].as_str().unwrap().contains("ban_user"));
+        let via_call = dispatcher.dispatch(call(META_CALL, serde_json::json!({"tool": "get_bot_info", "arguments": {"bot_username": "x"}}))).await.unwrap();
+        assert!(via_call.result.unwrap()["content"][0]["text"].as_str().unwrap().contains("About"));
+        // Unlisted tools stay callable directly by name.
+        let direct = dispatcher.dispatch(call("get_bot_info", serde_json::json!({"bot_username": "x"}))).await.unwrap();
+        assert!(direct.error.is_none());
+        let missing = dispatcher.dispatch(call("nope", serde_json::json!({}))).await.unwrap();
+        assert!(missing.error.is_some());
     }
 }

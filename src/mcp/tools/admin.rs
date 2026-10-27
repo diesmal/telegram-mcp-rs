@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -29,7 +30,7 @@ impl Tool for BanUserTool {
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.ban_user(chat_id, user_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "User banned." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -60,7 +61,7 @@ impl Tool for PromoteAdminTool {
         let rank = args.get("rank").and_then(|v| v.as_str());
         match telegram.promote_admin(chat_id, user_id, rank).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "User promoted." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -88,8 +89,8 @@ impl Tool for GetParticipantsTool {
         let chat_id = args.get("chat_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("chat_id is required"))?;
         let limit = args.get("limit").and_then(|v| v.as_i64()).unwrap_or(100) as i32;
         match telegram.get_participants(chat_id, limit).await {
-            Ok(users) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&users).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(users) => Ok(format::ok(&users, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -120,7 +121,7 @@ impl Tool for InviteUsersTool {
             .iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>();
         match telegram.invite_users(chat_id, user_ids).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Users invited." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -145,8 +146,8 @@ impl Tool for DemoteAdminTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.demote_admin(peer_id, user_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -174,8 +175,8 @@ impl Tool for EditAdminRightsTool {
         let ban_users = args.get("ban_users").and_then(|v| v.as_bool()).ok_or_else(|| invalid_params("ban_users is required"))?;
         let pin_messages = args.get("pin_messages").and_then(|v| v.as_bool()).ok_or_else(|| invalid_params("pin_messages is required"))?;
         match telegram.edit_admin_rights(peer_id, user_id, add_admins, ban_users, pin_messages).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -201,8 +202,8 @@ impl Tool for SetDefaultChatPermissionsTool {
         let send_messages = args.get("send_messages").and_then(|v| v.as_bool()).ok_or_else(|| invalid_params("send_messages is required"))?;
         let send_media = args.get("send_media").and_then(|v| v.as_bool()).ok_or_else(|| invalid_params("send_media is required"))?;
         match telegram.set_default_chat_permissions(peer_id, send_messages, send_media).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -227,8 +228,8 @@ impl Tool for ToggleSlowModeTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let seconds = args.get("seconds").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("seconds is required"))? as i32;
         match telegram.toggle_slow_mode(peer_id, seconds).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -252,8 +253,8 @@ impl Tool for GetAdminsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.get_admins(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -277,8 +278,8 @@ impl Tool for GetBannedUsersTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.get_banned_users(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -303,8 +304,8 @@ impl Tool for GetRecentActionsTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let limit = args.get("limit").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("limit is required"))? as i32;
         match telegram.get_recent_actions(peer_id, limit).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -329,8 +330,8 @@ impl Tool for UnbanUserTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.unban_user(peer_id, user_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -354,8 +355,8 @@ impl Tool for GetInviteLinkTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.get_invite_link(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -379,8 +380,8 @@ impl Tool for ExportChatInviteTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.export_chat_invite(peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -404,8 +405,8 @@ impl Tool for ImportChatInviteTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let hash = args.get("hash").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("hash is required"))?;
         match telegram.import_chat_invite(hash).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -429,8 +430,8 @@ impl Tool for JoinChatByLinkTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let link = args.get("link").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("link is required"))?;
         match telegram.join_chat_by_link(link).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

@@ -1,25 +1,45 @@
 use crate::telegram::{ChatService, ChatInfo};
-use super::GrammersService;
+use super::{convert, GrammersService};
 use anyhow::Result;
 use async_trait::async_trait;
 use grammers_tl_types as tl;
 
 #[async_trait]
 impl ChatService for GrammersService {
-    async fn list_chats(&self, limit: i32) -> Result<Vec<ChatInfo>> {
-        let mut chats = self.client.iter_dialogs();
+    async fn list_chats(&self, limit: i32, query: Option<&str>, kind: Option<&str>) -> Result<Vec<ChatInfo>> {
+        // Filtering happens client-side, so scan past `limit` dialogs (bounded)
+        // when a filter is set; without one, stop at `limit`.
+        const MAX_SCAN: usize = 1000;
+        let query = query.map(|q| q.to_lowercase()).filter(|q| !q.is_empty());
+        let filtered = query.is_some() || kind.is_some();
+        let mut dialogs = self.client.iter_dialogs();
         let mut result = Vec::new();
-        let mut count = 0;
-        while let Some(dialog) = chats.next().await? {
-            let peer = dialog.peer();
-            result.push(ChatInfo {
-                id: self.to_i64(peer.id()),
-                title: peer.name().unwrap_or_default().to_string(),
-                username: peer.username().map(|s| s.to_string()),
-                chat_type: format!("{:?}", peer),
-            });
-            count += 1;
-            if count >= limit {
+        let mut scanned = 0;
+        while let Some(dialog) = dialogs.next().await? {
+            scanned += 1;
+            let unread = match &dialog.raw {
+                tl::enums::Dialog::Dialog(d) if d.unread_count > 0 => Some(d.unread_count),
+                _ => None,
+            };
+            let chat = convert::chat_from_peer(dialog.peer(), unread);
+            let kind_ok = match kind {
+                None => true,
+                // "group" matches both basic groups and supergroups.
+                Some("group") => chat.kind == "group" || chat.kind == "supergroup",
+                Some(k) => chat.kind == k,
+            };
+            let query_ok = match &query {
+                None => true,
+                Some(q) => chat.title.to_lowercase().contains(q)
+                    || chat.username.as_deref().is_some_and(|u| u.to_lowercase().contains(q)),
+            };
+            if kind_ok && query_ok {
+                result.push(chat);
+                if result.len() >= limit as usize {
+                    break;
+                }
+            }
+            if filtered && scanned >= MAX_SCAN {
                 break;
             }
         }
@@ -27,16 +47,14 @@ impl ChatService for GrammersService {
     }
 
     async fn get_chat_info(&self, peer_id: i64) -> Result<ChatInfo> {
-        let mut chats = self.client.iter_dialogs();
-        while let Some(dialog) = chats.next().await? {
-            let peer = dialog.peer();
-            if self.to_i64(peer.id()) == peer_id {
-                return Ok(ChatInfo {
-                    id: self.to_i64(peer.id()),
-                    title: peer.name().unwrap_or("").to_string(),
-                    username: peer.username().map(|s| s.to_string()),
-                    chat_type: format!("{:?}", peer),
-                });
+        let mut dialogs = self.client.iter_dialogs();
+        while let Some(dialog) = dialogs.next().await? {
+            if self.to_i64(dialog.peer().id()) == peer_id {
+                let unread = match &dialog.raw {
+                    tl::enums::Dialog::Dialog(d) if d.unread_count > 0 => Some(d.unread_count),
+                    _ => None,
+                };
+                return Ok(convert::chat_from_peer(dialog.peer(), unread));
             }
         }
         anyhow::bail!("Chat not found in dialogs")

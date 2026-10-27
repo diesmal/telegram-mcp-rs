@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -15,15 +16,15 @@ impl Tool for ListContactsTool {
             description: "List your Telegram contacts.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": {}
+                "properties": { "full": format::full_schema() }
             }),
         }
     }
 
-    async fn execute(&self, _args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
+    async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         match telegram.list_contacts().await {
-            Ok(contacts) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&contacts).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(contacts) => Ok(format::ok(&contacts, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -39,6 +40,7 @@ impl Tool for SearchContactsTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "query": { "type": "string" }
                 },
                 "required": ["query"]
@@ -52,8 +54,8 @@ impl Tool for SearchContactsTool {
             None => return Err(invalid_params("query is required")),
         };
         match telegram.search_contacts(query).await {
-            Ok(contacts) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&contacts).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(contacts) => Ok(format::ok(&contacts, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -86,7 +88,7 @@ impl Tool for AddContactTool {
         let phone = args.get("phone").and_then(|v| v.as_str()).unwrap_or("");
         match telegram.add_contact(user_id, first_name, last_name, phone).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Contact added." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -113,7 +115,7 @@ impl Tool for DeleteContactTool {
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.delete_contact(user_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Contact deleted." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -140,7 +142,7 @@ impl Tool for BlockUserTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.block_user(peer_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "User blocked." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -167,7 +169,7 @@ impl Tool for UnblockUserTool {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.unblock_user(peer_id).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "User unblocked." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -191,8 +193,8 @@ impl Tool for GetBlockedUsersTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.get_blocked_users().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -216,8 +218,8 @@ impl Tool for ImportContactsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let contacts = vec![]; // Array extraction simplified for stub
         match telegram.import_contacts(contacts).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -241,8 +243,8 @@ impl Tool for ExportContactsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.export_contacts().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -266,8 +268,8 @@ impl Tool for GetContactIdsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.get_contact_ids().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -291,8 +293,8 @@ impl Tool for GetDirectChatByContactTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let contact_query = args.get("contact_query").and_then(|v| v.as_str()).unwrap_or("").to_string();
         match telegram.get_direct_chat_by_contact(&contact_query).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -316,8 +318,8 @@ impl Tool for GetContactChatsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let contact_id = args.get("contact_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("contact_id is required"))?;
         match telegram.get_contact_chats(contact_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -341,8 +343,8 @@ impl Tool for GetLastInteractionTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let contact_id = args.get("contact_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("contact_id is required"))?;
         match telegram.get_last_interaction(contact_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

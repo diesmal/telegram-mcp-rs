@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -26,8 +27,8 @@ impl Tool for SearchGlobalTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("query is required"))?;
         match telegram.search_global(query).await {
-            Ok(msgs) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&msgs).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(msgs) => Ok(format::ok(&msgs, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -53,8 +54,8 @@ impl Tool for SearchPublicChatsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("query is required"))?;
         match telegram.search_public_chats(query).await {
-            Ok(chats) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&chats).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(chats) => Ok(format::ok(&chats, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -81,7 +82,7 @@ impl Tool for SubscribePublicChannelTool {
         let query = args.get("query").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("query is required"))?;
         match telegram.subscribe_public_channel(query).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Subscribed successfully." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -107,8 +108,8 @@ impl Tool for GetCommonChatsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.get_common_chats(user_id).await {
-            Ok(chats) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&chats).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(chats) => Ok(format::ok(&chats, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -134,8 +135,8 @@ impl Tool for ListTopicsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.list_topics(peer_id).await {
-            Ok(topics) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&topics).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(topics) => Ok(format::ok(&topics, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -158,7 +159,7 @@ impl Tool for GetPrivacySettingsTool {
     async fn execute(&self, _args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         match telegram.get_privacy_settings().await {
             Ok(settings) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": settings }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -187,7 +188,7 @@ impl Tool for SetPrivacySettingsTool {
         let value = args.get("value").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("value is required"))?;
         match telegram.set_privacy_settings(key, value).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Privacy settings updated." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

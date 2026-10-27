@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -24,7 +25,7 @@ impl Tool for GetMeTool {
     async fn execute(&self, _args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         match telegram.get_me().await {
             Ok(user) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("User: {} (ID: {})", user.first_name, user.id) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -54,7 +55,7 @@ impl Tool for UpdateProfileTool {
         let about = args.get("about").and_then(|v| v.as_str());
         match telegram.update_profile(first_name, last_name, about).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Profile updated." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -81,7 +82,7 @@ impl Tool for SetProfilePhotoTool {
         let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| invalid_params("path is required"))?;
         match telegram.set_profile_photo(path).await {
             Ok(_) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": "Profile photo set." }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -105,8 +106,8 @@ impl Tool for DeleteProfilePhotoTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.delete_profile_photo().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -130,8 +131,8 @@ impl Tool for GetUserStatusTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let user_id = args.get("user_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("user_id is required"))?;
         match telegram.get_user_status(user_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -155,8 +156,8 @@ impl Tool for ResolveUsernameTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let username = args.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
         match telegram.resolve_username(&username).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -180,8 +181,8 @@ impl Tool for ListAccountsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
 
         match telegram.list_accounts().await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::telegram::{SearchService, MessageInfo, ChatInfo};
-use super::GrammersService;
+use super::{convert, GrammersService};
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use grammers_tl_types as tl;
@@ -18,27 +18,7 @@ impl SearchService for GrammersService {
         
         let mut result = Vec::new();
         if let tl::enums::contacts::Found::Found(f) = res {
-            for chat in f.chats {
-                match chat {
-                    tl::enums::Chat::Channel(c) => {
-                        result.push(ChatInfo {
-                            id: c.id,
-                            title: c.title,
-                            username: c.username,
-                            chat_type: "Channel".to_string(),
-                        });
-                    }
-                    tl::enums::Chat::Chat(c) => {
-                        result.push(ChatInfo {
-                            id: c.id,
-                            title: c.title,
-                            username: None,
-                            chat_type: "Group".to_string(),
-                        });
-                    }
-                    _ => {}
-                }
-            }
+            result.extend(f.chats.iter().filter_map(convert::chat_from_raw));
         }
         Ok(result)
     }
@@ -67,14 +47,7 @@ impl SearchService for GrammersService {
         
         let mut result = Vec::new();
         if let tl::enums::messages::Chats::Chats(chats) = res {
-            for chat in chats.chats {
-                match chat {
-                    tl::enums::Chat::Chat(c) => {
-                        result.push(ChatInfo { id: c.id, title: c.title, username: None, chat_type: "Group".to_string() });
-                    }
-                    _ => {}
-                }
-            }
+            result.extend(chats.chats.iter().filter_map(convert::chat_from_raw));
         }
         Ok(result)
     }

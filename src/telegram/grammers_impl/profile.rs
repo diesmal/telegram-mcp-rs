@@ -68,7 +68,7 @@ impl ProfileService for GrammersService {
             for user in f.users {
                 if let tl::enums::User::User(u) = user {
                     if let Some(status) = u.status {
-                        return Ok(format!("{:?}", status));
+                        return Ok(user_status_label(&status));
                     }
                 }
             }
@@ -81,5 +81,22 @@ impl ProfileService for GrammersService {
         // Wait, the client is in GrammersService, so we can just do:
         let peer = self.client.resolve_username(username).await?.context("Peer not found")?;
         Ok(peer.id().bot_api_dialog_id())
+    }
+}
+
+fn user_status_label(status: &tl::enums::UserStatus) -> String {
+    use tl::enums::UserStatus as S;
+    let at = |ts: i32| {
+        chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_default()
+    };
+    match status {
+        S::Empty => "unknown".into(),
+        S::Online(o) => format!("online (until {})", at(o.expires)),
+        S::Offline(o) => format!("last seen {}", at(o.was_online)),
+        S::Recently(_) => "last seen recently".into(),
+        S::LastWeek(_) => "last seen within a week".into(),
+        S::LastMonth(_) => "last seen within a month".into(),
     }
 }

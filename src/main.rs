@@ -1,23 +1,31 @@
 use anyhow::Result;
 use clap::Parser;
-use grammers_client::Client;
-use grammers_mtsender::SenderPool;
-use grammers_session::storages::SqliteSession;
-use std::io::{self, BufRead, Write};
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::sync::Arc;
 use telegram_mcp_rs::{
-    config::AppConfig,
     mcp::{dispatcher::Dispatcher, protocol::JsonRpcRequest},
-    telegram::grammers_impl::GrammersService,
-    telegram::path_guard::PathGuard,
+    server::{self, paths},
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Run the shared Telegram daemon (started automatically by the proxy).
+    #[arg(long)]
+    daemon: bool,
+
+    /// Build id the daemon serves (set by the proxy).
+    #[arg(long, requires = "daemon")]
+    build: Option<String>,
+
+    /// Legacy mode: one process per client with its own Telegram connection.
+    #[arg(long, conflicts_with = "daemon")]
+    direct: bool,
+
     /// Optional positional arguments define server-side allowed roots for file-path tools.
     #[arg(value_name = "ALLOWED_ROOTS")]
     allowed_roots: Vec<PathBuf>,
@@ -25,103 +33,64 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 0. Load .env
-    dotenvy::dotenv().ok();
-
-    // 1. Parse CLI arguments
     let args = Args::parse();
 
-    // 2. Initialize logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .with_writer(io::stderr)
+        .with_ansi(io::stderr().is_terminal())
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    // 3. Load Configuration
-    let config = match AppConfig::load() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Configuration error: {:?}", e);
-            std::process::exit(1);
-        }
-    };
-    info!("Loaded configuration successfully.");
+    // Everything (.env, telegram.session, run/) lives in the install root,
+    // whatever directory the client started us from.
+    let exe = server::proxy::exe_path()?;
+    let base = paths::base_dir(&exe);
+    std::env::set_current_dir(&base)?;
+    dotenvy::from_path(base.join(".env")).ok();
+    let run = paths::RunPaths::new(&base)?;
+    let roots = server::resolve_roots(&args.allowed_roots);
 
-    // 4. Initialize PathGuard
-    let mut resolved_roots = Vec::new();
-    
-    // 4a. Try loading from CLI arguments
-    for root in args.allowed_roots {
-        if root.exists() {
-            resolved_roots.push(root.canonicalize()?);
-        }
-    }
-
-    // 4b. Try loading from Environment Variable (fallback)
-    if resolved_roots.is_empty() {
-        if let Ok(env_roots) = std::env::var("TELEGRAM_ALLOWED_ROOTS") {
-            for root_str in env_roots.split(',') {
-                let root = std::path::PathBuf::from(root_str.trim());
-                if root.exists() {
-                    resolved_roots.push(root.canonicalize()?);
-                }
-            }
-        }
-    }
-
-    if resolved_roots.is_empty() {
-        info!("Warning: No allowed roots configured. File tools will be disabled.");
+    let result = if args.daemon {
+        let build = match args.build {
+            Some(b) => b,
+            None => paths::build_id(&exe)?,
+        };
+        server::daemon::run(build, roots, run).await
+    } else if args.direct {
+        run_direct(roots).await
     } else {
-        info!("Allowed roots: {:?}", resolved_roots);
+        server::proxy::run(exe, args.allowed_roots, run).await
+    };
+    if let Err(e) = &result {
+        error!("{e:#}");
     }
-    
-    let path_guard = PathGuard::new(resolved_roots);
+    result
+}
 
-    // 5. Initialize Telegram Session
-    let session = Arc::new(SqliteSession::open(&config.session_file).await?);
-    let SenderPool {
-        runner,
-        updates: _,
-        handle,
-    } = SenderPool::new(Arc::clone(&session), config.api_id);
-    let _pool_task = tokio::spawn(runner.run());
+/// Original single-process stdio server.
+async fn run_direct(roots: Vec<PathBuf>) -> Result<()> {
+    let telegram = server::start_telegram(roots).await?;
+    let dispatcher = Arc::new(Dispatcher::new(telegram));
 
-    let client = Client::new(handle.clone());
-
-    if !client.is_authorized().await? {
-        error!("Telegram client is not authorized! Please run the login bin first.");
-        std::process::exit(1);
-    }
-
-    info!("Telegram client initialized and authorized.");
-
-    // 6. Wire up services
-    let telegram_service = Arc::new(GrammersService::new(client, path_guard));
-    let dispatcher = Arc::new(Dispatcher::new(telegram_service));
-
-    // 7. MCP stdio loop
     info!("Starting MCP JSON-RPC stdio loop...");
-    let stdin = io::stdin();
-    for line in stdin.lock().lines() {
-        let line = line?;
+    let mut stdout = tokio::io::stdout();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    while let Some(line) = lines.next_line().await? {
         if line.trim().is_empty() {
             continue;
         }
-
         match serde_json::from_str::<JsonRpcRequest>(&line) {
             Ok(req) => {
                 if let Some(resp) = dispatcher.dispatch(req).await {
                     let out = serde_json::to_string(&resp)?;
-                    println!("{}", out);
-                    let _ = io::stdout().flush();
+                    stdout.write_all(out.as_bytes()).await?;
+                    stdout.write_all(b"\n").await?;
+                    stdout.flush().await?;
                 }
             }
-            Err(e) => {
-                error!("Failed to parse JSON-RPC request: {}", e);
-            }
+            Err(e) => error!("Failed to parse JSON-RPC request: {}", e),
         }
     }
-
     Ok(())
 }

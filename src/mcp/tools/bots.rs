@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -29,8 +30,8 @@ impl Tool for GetBotInfoTool {
             None => return Err(invalid_params("bot_username is required")),
         };
         match telegram.get_bot_info(bot_username).await {
-            Ok(info) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&info).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(info) => Ok(format::ok(&info, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -64,8 +65,8 @@ impl Tool for ListInlineButtonsTool {
             None => return Err(invalid_params("message_id is required")),
         };
         match telegram.list_inline_buttons(chat_id, message_id).await {
-            Ok(buttons) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&buttons).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(buttons) => Ok(format::ok(&buttons, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -105,7 +106,7 @@ impl Tool for PressInlineButtonTool {
         };
         match telegram.press_inline_button(chat_id, message_id, button_data).await {
             Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": res }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -129,8 +130,8 @@ impl Tool for SetBotCommandsTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let commands = vec![]; // Array extraction simplified for stub
         match telegram.set_bot_commands(commands).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }

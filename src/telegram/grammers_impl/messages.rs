@@ -1,5 +1,5 @@
 use crate::telegram::{MessageService, MessageInfo};
-use super::GrammersService;
+use super::{convert, GrammersService};
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use grammers_client::message::InputMessage;
@@ -36,13 +36,7 @@ impl MessageService for GrammersService {
         let mut result = Vec::new();
         let mut count = 0;
         while let Some(msg) = messages.next().await? {
-            result.push(MessageInfo {
-                id: msg.id(),
-                sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-                text: msg.text().to_string(),
-                date: msg.date().timestamp(),
-                reply_to_msg_id: msg.reply_to_message_id(),
-            });
+            result.push(convert::msg_from_client(&msg));
             count += 1;
             if count >= limit {
                 break;
@@ -60,13 +54,7 @@ impl MessageService for GrammersService {
         let mut result = Vec::new();
         let mut count = 0;
         while let Some(msg) = iter.next().await? {
-            result.push(MessageInfo {
-                id: msg.id(),
-                sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-                text: msg.text().to_string(),
-                date: msg.date().timestamp(),
-                reply_to_msg_id: msg.reply_to_message_id(),
-            });
+            result.push(convert::msg_from_client(&msg));
             count += 1;
             if count >= limit {
                 break;
@@ -118,33 +106,7 @@ impl MessageService for GrammersService {
             hash: 0,
         }).await?;
 
-        let messages = match res {
-            tl::enums::messages::Messages::Messages(m) => m.messages,
-            tl::enums::messages::Messages::Slice(s) => s.messages,
-            tl::enums::messages::Messages::ChannelMessages(c) => c.messages,
-            tl::enums::messages::Messages::NotModified(_) => Vec::new(),
-        };
-
-        let mut result = Vec::new();
-        for msg in messages {
-            if let tl::enums::Message::Message(mm) = msg {
-                let sender_id = match mm.from_id {
-                    Some(tl::enums::Peer::User(u)) => u.user_id,
-                    Some(tl::enums::Peer::Chat(c)) => -c.chat_id,
-                    Some(tl::enums::Peer::Channel(c)) => -c.channel_id,
-                    None => 0,
-                };
-                
-                result.push(MessageInfo {
-                    id: mm.id,
-                    sender_id,
-                    text: mm.message,
-                    date: mm.date as i64,
-                    reply_to_msg_id: None,
-                });
-            }
-        }
-        Ok(result)
+        Ok(convert::msgs_from_raw(res, false))
     }
 
 
@@ -166,33 +128,7 @@ impl MessageService for GrammersService {
             users_only: false,
         }).await?;
 
-        let messages = match res {
-            tl::enums::messages::Messages::Messages(m) => m.messages,
-            tl::enums::messages::Messages::Slice(s) => s.messages,
-            tl::enums::messages::Messages::ChannelMessages(c) => c.messages,
-            tl::enums::messages::Messages::NotModified(_) => Vec::new(),
-        };
-
-        let mut result = Vec::new();
-        for msg in messages {
-            if let tl::enums::Message::Message(mm) = msg {
-                let sender_id = match mm.from_id {
-                    Some(tl::enums::Peer::User(u)) => u.user_id,
-                    Some(tl::enums::Peer::Chat(c)) => -c.chat_id,
-                    Some(tl::enums::Peer::Channel(c)) => -c.channel_id,
-                    None => 0,
-                };
-                
-                result.push(MessageInfo {
-                    id: mm.id,
-                    sender_id,
-                    text: mm.message,
-                    date: mm.date as i64,
-                    reply_to_msg_id: None,
-                });
-            }
-        }
-        Ok(result)
+        Ok(convert::msgs_from_raw(res, true))
     }
 
     async fn send_message(&self, peer_id: i64, text: &str, reply_to_id: Option<i32>) -> Result<MessageInfo> {
@@ -202,13 +138,7 @@ impl MessageService for GrammersService {
             input = input.reply_to(Some(id));
         }
         let msg = self.client.send_message(peer_ref, input).await?;
-        Ok(MessageInfo {
-            id: msg.id(),
-            sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-            text: msg.text().to_string(),
-            date: msg.date().timestamp(),
-            reply_to_msg_id: msg.reply_to_message_id(),
-        })
+        Ok(convert::msg_from_client(&msg))
     }
 
     async fn edit_message(&self, peer_id: i64, message_id: i32, new_text: &str) -> Result<()> {
@@ -309,21 +239,7 @@ impl MessageService for GrammersService {
             hash: 0,
         }).await?;
         
-        let mut result = Vec::new();
-        if let tl::enums::messages::Messages::Messages(m) = res {
-            for msg in m.messages {
-                if let tl::enums::Message::Message(mm) = msg {
-                    result.push(MessageInfo {
-                        id: mm.id,
-                        sender_id: 0, 
-                        text: mm.message,
-                        date: mm.date as i64,
-                        reply_to_msg_id: None,
-                    });
-                }
-            }
-        }
-        Ok(result)
+        Ok(convert::msgs_from_raw(res, false))
     }
 
     async fn save_draft(&self, peer_id: i64, message: &str, reply_to_id: Option<i32>) -> Result<()> {
@@ -364,17 +280,11 @@ impl MessageService for GrammersService {
 
     async fn get_message_context(&self, peer_id: i64, message_id: i32) -> Result<Vec<MessageInfo>> {
         let peer_ref = self.get_peer_ref(peer_id).await?;
-        // Simplest way is to fetch messages around it using iter_messages
-        let mut iter = self.client.iter_messages(peer_ref).offset_id(message_id + 10).limit(20);
+        // Up to 5 messages after the target, the target itself, and 5 before it.
+        let mut iter = self.client.iter_messages(peer_ref).offset_id(message_id + 6).limit(11);
         let mut result = Vec::new();
         while let Some(msg) = iter.next().await? {
-            result.push(MessageInfo {
-                id: msg.id(),
-                sender_id: msg.sender().map(|s| self.to_i64(s.id())).unwrap_or(0),
-                text: msg.text().to_string(),
-                date: msg.date().timestamp(),
-                reply_to_msg_id: msg.reply_to_message_id(),
-            });
+            result.push(convert::msg_from_client(&msg));
         }
         Ok(result)
     }
@@ -410,9 +320,20 @@ impl MessageService for GrammersService {
 
         let mut reactions = Vec::new();
         if let tl::enums::messages::MessageReactionsList::List(l) = res {
+            let names = convert::Names::new(&l.users, &l.chats);
             for r in l.reactions {
                 if let tl::enums::MessagePeerReaction::Reaction(react) = r {
-                    reactions.push(format!("Peer: {:?}, Reaction: {:?}", react.peer_id, react.reaction));
+                    let (id, name) = names.peer_label(&react.peer_id);
+                    let emoji = match react.reaction {
+                        tl::enums::Reaction::Emoji(e) => e.emoticon,
+                        tl::enums::Reaction::CustomEmoji(_) => "custom emoji".to_string(),
+                        tl::enums::Reaction::Paid => "paid".to_string(),
+                        tl::enums::Reaction::Empty => continue,
+                    };
+                    reactions.push(match name {
+                        Some(n) => format!("{n} ({id}): {emoji}"),
+                        None => format!("{id}: {emoji}"),
+                    });
                 }
             }
         }
@@ -457,21 +378,7 @@ impl MessageService for GrammersService {
             hash: 0,
         }).await?;
 
-        let mut result = Vec::new();
-        if let tl::enums::messages::Messages::Messages(m) = res {
-            for msg in m.messages {
-                if let tl::enums::Message::Message(mm) = msg {
-                    result.push(MessageInfo {
-                        id: mm.id,
-                        sender_id: 0,
-                        text: mm.message,
-                        date: mm.date as i64,
-                        reply_to_msg_id: None,
-                    });
-                }
-            }
-        }
-        Ok(result)
+        Ok(convert::msgs_from_raw(res, false))
     }
 
     async fn unpin_message(&self, peer_id: i64, message_id: i32) -> Result<()> {

@@ -1,4 +1,5 @@
 use crate::mcp::protocol::JsonRpcError;
+use crate::mcp::format;
 use crate::mcp::tool::{Tool, ToolInfo, invalid_params};
 use crate::telegram::TelegramService;
 use async_trait::async_trait;
@@ -15,15 +16,15 @@ impl Tool for ListFoldersTool {
             description: "List Telegram chat folders (dialog filters).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": {}
+                "properties": { "full": format::full_schema() }
             }),
         }
     }
 
-    async fn execute(&self, _args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
+    async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         match telegram.list_folders().await {
-            Ok(folders) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&folders).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(folders) => Ok(format::ok(&folders, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -39,6 +40,7 @@ impl Tool for GetFolderTool {
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
+                    "full": format::full_schema(),
                     "folder_id": { "type": "integer" }
                 },
                 "required": ["folder_id"]
@@ -52,8 +54,8 @@ impl Tool for GetFolderTool {
             None => return Err(invalid_params("folder_id is required")),
         };
         match telegram.get_folder(folder_id).await {
-            Ok(folder) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&folder).unwrap() }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(folder) => Ok(format::ok(&folder, format::full_flag(&args))),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -79,8 +81,8 @@ impl Tool for CreateFolderTool {
         let included_peers = args.get("included_peers").and_then(|v| v.as_array()).ok_or_else(|| invalid_params("included_peers is required"))?.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>();
         let excluded_peers = args.get("excluded_peers").and_then(|v| v.as_array()).ok_or_else(|| invalid_params("excluded_peers is required"))?.iter().filter_map(|v| v.as_i64()).collect::<Vec<_>>();
         match telegram.create_folder(title, included_peers, excluded_peers).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -104,8 +106,8 @@ impl Tool for DeleteFolderTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let folder_id = args.get("folder_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("folder_id is required"))? as i32;
         match telegram.delete_folder(folder_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -130,8 +132,8 @@ impl Tool for AddChatToFolderTool {
         let folder_id = args.get("folder_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("folder_id is required"))? as i32;
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.add_chat_to_folder(folder_id, peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -156,8 +158,8 @@ impl Tool for RemoveChatFromFolderTool {
         let folder_id = args.get("folder_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("folder_id is required"))? as i32;
         let peer_id = args.get("peer_id").and_then(|v| v.as_i64()).ok_or_else(|| invalid_params("peer_id is required"))?;
         match telegram.remove_chat_from_folder(folder_id, peer_id).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
@@ -181,8 +183,8 @@ impl Tool for ReorderFoldersTool {
     async fn execute(&self, args: Value, telegram: Arc<dyn TelegramService>) -> Result<Value, JsonRpcError> {
         let folder_ids = args.get("folder_ids").and_then(|v| v.as_array()).ok_or_else(|| invalid_params("folder_ids is required"))?.iter().filter_map(|v| v.as_i64().map(|id| id as i32)).collect::<Vec<_>>();
         match telegram.reorder_folders(folder_ids).await {
-            Ok(res) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&res).unwrap_or_else(|_| "Success".to_string()) }] })),
-            Err(e) => Ok(serde_json::json!({ "content": [{ "type": "text", "text": format!("Error: {}", e) }], "isError": true })),
+            Ok(res) => Ok(format::ok(&res, false)),
+            Err(e) => Ok(format::err(e)),
         }
     }
 }
