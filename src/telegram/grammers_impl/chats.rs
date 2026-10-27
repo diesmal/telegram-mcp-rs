@@ -63,15 +63,28 @@ impl ChatService for GrammersService {
     async fn create_group(&self, title: &str, user_ids: Vec<i64>) -> Result<i64> {
         let mut users = Vec::new();
         for id in user_ids {
-            users.push(tl::enums::InputUser::User(tl::types::InputUser { user_id: id, access_hash: 0 }));
+            match self.get_peer_ref(id).await? {
+                tl::enums::InputPeer::User(u) => users.push(tl::enums::InputUser::User(tl::types::InputUser { user_id: u.user_id, access_hash: u.access_hash })),
+                _ => anyhow::bail!("{id} is not a user id"),
+            }
         }
-        let _res = self.client.invoke(&tl::functions::messages::CreateChat {
+        let res = self.client.invoke(&tl::functions::messages::CreateChat {
             users,
             title: title.to_string(),
             ttl_period: None,
         }).await?;
 
-        Ok(0)
+        let tl::enums::messages::InvitedUsers::Users(invited) = res;
+        if let tl::enums::Updates::Updates(u) = invited.updates {
+            for chat in &u.chats {
+                if let Some(info) = convert::chat_from_raw(chat) {
+                    if info.title == title {
+                        return Ok(info.id);
+                    }
+                }
+            }
+        }
+        anyhow::bail!("Group created but its id was not in the response")
     }
 
     async fn create_channel(&self, title: &str, about: &str, megagroup: bool) -> Result<i64> {
@@ -87,10 +100,13 @@ impl ChatService for GrammersService {
             forum: false,
         }).await?;
 
+        // The new channel comes back in the `chats` of the updates.
         if let tl::enums::Updates::Updates(u) = res {
-            for update in u.updates {
-                if let tl::enums::Update::Channel(c) = update {
-                    return Ok(-c.channel_id - 1001000000000); // Channel format
+            for chat in &u.chats {
+                if let Some(info) = convert::chat_from_raw(chat) {
+                    if info.title == title {
+                        return Ok(info.id);
+                    }
                 }
             }
         }

@@ -1,5 +1,7 @@
 use crate::telegram::{MediaService, MessageInfo};
 use super::{convert, GrammersService};
+use grammers_client::media::Downloadable;
+use grammers_tl_types as tl;
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -73,7 +75,28 @@ impl MediaService for GrammersService {
             downloads_dir.join(filename)
         };
 
-        self.client.download_media(&media, &target_path).await?;
+        // grammers picks the photo size with the most bytes, which for small
+        // photos is the inline stripped thumb that the server refuses to serve;
+        // download the largest real size instead.
+        let photo_location = match &msg.raw {
+            tl::enums::Message::Message(m) => match &m.media {
+                Some(tl::enums::MessageMedia::Photo(p)) => match &p.photo {
+                    Some(tl::enums::Photo::Photo(photo)) => largest_photo_location(photo),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+        let result = match photo_location {
+            Some(loc) => self.save_download(&RawLocation(loc), &target_path).await,
+            None => self.save_download(&media, &target_path).await,
+        };
+        if let Err(e) = result {
+            // Don't leave an empty file behind.
+            let _ = std::fs::remove_file(&target_path);
+            return Err(e.into());
+        }
         Ok(target_path)
     }
 
@@ -115,5 +138,50 @@ impl MediaService for GrammersService {
 
     async fn get_user_photos(&self, _user_id: i64) -> Result<Vec<String>> {
         anyhow::bail!("User photos require MTProto v2 mapping")
+    }
+}
+
+struct RawLocation(tl::enums::InputFileLocation);
+
+impl Downloadable for RawLocation {
+    fn to_raw_input_location(&self) -> Option<tl::enums::InputFileLocation> {
+        Some(self.0.clone())
+    }
+}
+
+/// Largest downloadable size of a photo by pixel area (ignores inline
+/// stripped / cached thumbs).
+fn largest_photo_location(photo: &tl::types::Photo) -> Option<tl::enums::InputFileLocation> {
+    let thumb = photo
+        .sizes
+        .iter()
+        .filter_map(|s| match s {
+            tl::enums::PhotoSize::Size(s) => Some((s.w * s.h, s.r#type.clone())),
+            tl::enums::PhotoSize::Progressive(s) => Some((s.w * s.h, s.r#type.clone())),
+            _ => None,
+        })
+        .max_by_key(|(area, _)| *area)?
+        .1;
+    Some(tl::enums::InputFileLocation::InputPhotoFileLocation(tl::types::InputPhotoFileLocation {
+        id: photo.id,
+        access_hash: photo.access_hash,
+        file_reference: photo.file_reference.clone(),
+        thumb_size: thumb,
+    }))
+}
+
+impl GrammersService {
+    /// Like `Client::download_media`, but flushes the file before returning.
+    /// grammers drops its tokio File unflushed, so an immediate read (get_image)
+    /// could see an empty file.
+    async fn save_download<D: Downloadable>(&self, item: &D, path: &std::path::Path) -> Result<()> {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(path).await?;
+        let mut download = self.client.iter_download(item);
+        while let Some(chunk) = download.next().await? {
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        Ok(())
     }
 }

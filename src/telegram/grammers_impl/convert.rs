@@ -117,7 +117,7 @@ pub fn msg_from_client(msg: &Message) -> MessageInfo {
         _ => None,
     };
     let text = match &msg.raw {
-        tl::enums::Message::Service(_) => "[service message]".to_string(),
+        tl::enums::Message::Service(m) => format!("[{}]", service_label(&m.action)),
         _ => msg.text().to_string(),
     };
     // Channel posts have no sender (the channel is the author): leave it empty
@@ -238,4 +238,25 @@ pub fn msgs_from_raw(res: tl::enums::messages::Messages, with_chat: bool) -> Vec
             }
         })
         .collect()
+}
+
+/// Short description of a service message ("pinned a message", ...).
+pub fn service_label(action: &tl::enums::MessageAction) -> String {
+    use tl::enums::MessageAction as A;
+    match action {
+        A::PinMessage => "pinned a message".into(),
+        A::ChatCreate(c) => format!("created group \"{}\"", c.title),
+        A::ChannelCreate(c) => format!("created \"{}\"", c.title),
+        A::ChatEditTitle(t) => format!("renamed to \"{}\"", t.title),
+        A::ChatEditPhoto(_) => "changed the photo".into(),
+        A::ChatDeletePhoto => "removed the photo".into(),
+        A::ChatAddUser(u) => format!("added {} user(s)", u.users.len()),
+        A::ChatDeleteUser(_) => "removed a user".into(),
+        A::ChatJoinedByLink(_) | A::ChatJoinedByRequest => "joined".into(),
+        A::ChatMigrateTo(_) | A::ChannelMigrateFrom(_) => "upgraded to supergroup".into(),
+        A::PhoneCall(_) => "call".into(),
+        A::GroupCall(_) => "group call".into(),
+        A::ScreenshotTaken => "took a screenshot".into(),
+        _ => "service message".into(),
+    }
 }

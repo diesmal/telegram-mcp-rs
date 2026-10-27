@@ -188,7 +188,8 @@ impl MessageService for GrammersService {
         let to_peer = self.get_peer_ref(to_peer_id).await?;
         let from_peer = self.get_peer_ref(from_peer_id).await?;
         
-        self.client.invoke(&tl::functions::messages::ForwardMessages {
+        let count = message_ids.len();
+        let updates = self.client.invoke(&tl::functions::messages::ForwardMessages {
             silent: false,
             background: false,
             with_my_score: false,
@@ -198,7 +199,8 @@ impl MessageService for GrammersService {
             allow_paid_floodskip: false,
             from_peer,
             id: message_ids,
-            random_id: (0..1).map(|_| rand::random()).collect(), 
+            // Telegram wants one random_id per forwarded message.
+            random_id: (0..count).map(|_| rand::random()).collect(),
             to_peer,
             top_msg_id: None,
             schedule_date: None,
@@ -212,7 +214,16 @@ impl MessageService for GrammersService {
             suggested_post: None,
         }).await?;
 
-        Ok(vec![])
+        // New ids arrive as UpdateMessageID entries.
+        let mut forwarded = Vec::new();
+        if let tl::enums::Updates::Updates(u) = updates {
+            for update in u.updates {
+                if let tl::enums::Update::MessageId(m) = update {
+                    forwarded.push(MessageInfo { id: m.id, ..Default::default() });
+                }
+            }
+        }
+        Ok(forwarded)
     }
 
     async fn send_reaction(&self, peer_id: i64, message_id: i32, emoji: &str) -> Result<()> {

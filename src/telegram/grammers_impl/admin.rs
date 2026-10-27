@@ -279,36 +279,42 @@ impl AdminService for GrammersService {
     }
 
     async fn get_admins(&self, peer_id: i64) -> Result<Vec<UserInfo>> {
-        let peer_ref = self.get_peer_ref(peer_id).await?;
-        let mut iter = self.client.iter_participants(&peer_ref);
-        // Note: Filter for admins locally or use specific tl function for getting admins
-        let mut result = Vec::new();
-        while let Some(participant) = iter.next().await? {
-            // Simplified: return all for now to satisfy stub since grammers filter is complex
-            result.push(UserInfo {
-                id: self.to_i64(participant.user.id().into()),
-                first_name: participant.user.first_name().unwrap_or("").to_string(),
-                last_name: participant.user.last_name().map(|s| s.to_string()),
-                username: participant.user.username().map(|s| s.to_string()),
-            });
+        match self.get_peer_ref(peer_id).await? {
+            tl::enums::InputPeer::Channel(c) => {
+                self.channel_participants(c, tl::enums::ChannelParticipantsFilter::ChannelParticipantsAdmins).await
+            }
+            tl::enums::InputPeer::Chat(c) => {
+                // Basic groups: admins are flagged in the full chat's participant list.
+                let tl::enums::messages::ChatFull::Full(full) = self.client.invoke(&tl::functions::messages::GetFullChat { chat_id: c.chat_id }).await?;
+                let mut admin_ids = std::collections::HashSet::new();
+                if let tl::enums::ChatFull::Full(f) = &full.full_chat {
+                    if let tl::enums::ChatParticipants::Participants(p) = &f.participants {
+                        for part in &p.participants {
+                            match part {
+                                tl::enums::ChatParticipant::Creator(x) => { admin_ids.insert(x.user_id); }
+                                tl::enums::ChatParticipant::Admin(x) => { admin_ids.insert(x.user_id); }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Ok(users_info(&full.users).into_iter().filter(|u| admin_ids.contains(&u.id)).collect())
+            }
+            _ => anyhow::bail!("Admins exist only in groups and channels"),
         }
-        Ok(result)
     }
 
     async fn get_banned_users(&self, peer_id: i64) -> Result<Vec<UserInfo>> {
-        let peer_ref = self.get_peer_ref(peer_id).await?;
-        // Same as above, simplified implementation
-        let mut iter = self.client.iter_participants(&peer_ref);
-        let mut result = Vec::new();
-        while let Some(participant) = iter.next().await? {
-            result.push(UserInfo {
-                id: self.to_i64(participant.user.id().into()),
-                first_name: participant.user.first_name().unwrap_or("").to_string(),
-                last_name: participant.user.last_name().map(|s| s.to_string()),
-                username: participant.user.username().map(|s| s.to_string()),
-            });
+        match self.get_peer_ref(peer_id).await? {
+            tl::enums::InputPeer::Channel(c) => {
+                self.channel_participants(
+                    c,
+                    tl::enums::ChannelParticipantsFilter::ChannelParticipantsKicked(tl::types::ChannelParticipantsKicked { q: String::new() }),
+                )
+                .await
+            }
+            _ => anyhow::bail!("Ban lists exist only in supergroups and channels"),
         }
-        Ok(result)
     }
 
     async fn get_recent_actions(&self, _peer_id: i64, _limit: i32) -> Result<Vec<String>> {
@@ -404,5 +410,45 @@ impl AdminService for GrammersService {
     async fn join_chat_by_link(&self, link: &str) -> Result<i64> {
         let hash = link.split('/').last().unwrap_or(link);
         self.import_chat_invite(hash).await
+    }
+}
+fn users_info(users: &[tl::enums::User]) -> Vec<UserInfo> {
+    users
+        .iter()
+        .filter_map(|u| match u {
+            tl::enums::User::User(u) => Some(UserInfo {
+                id: u.id,
+                first_name: u.first_name.clone().unwrap_or_default(),
+                last_name: u.last_name.clone(),
+                username: u.username.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+impl GrammersService {
+    async fn channel_participants(
+        &self,
+        channel: tl::types::InputPeerChannel,
+        filter: tl::enums::ChannelParticipantsFilter,
+    ) -> Result<Vec<UserInfo>> {
+        let res = self
+            .client
+            .invoke(&tl::functions::channels::GetParticipants {
+                channel: tl::enums::InputChannel::Channel(tl::types::InputChannel {
+                    channel_id: channel.channel_id,
+                    access_hash: channel.access_hash,
+                }),
+                filter,
+                offset: 0,
+                limit: 200,
+                hash: 0,
+            })
+            .await?;
+        Ok(match res {
+            tl::enums::channels::ChannelParticipants::Participants(p) => users_info(&p.users),
+            tl::enums::channels::ChannelParticipants::NotModified => Vec::new(),
+        })
     }
 }
